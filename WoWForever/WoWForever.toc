@@ -1,4 +1,4 @@
-## Interface: 110107
+## Interface: 16001
 ## Title: WoW Forever
 ## Notes: Tracks character names, levels, professions, and location across your account.
 ## Version: 0.1.0
