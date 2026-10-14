@@ -1,8 +1,12 @@
 ## Interface: 16001
 ## Title: WoW Forever
-## Notes: Tracks character names, levels, professions, and location across your account.
-## Version: 0.1.0
+## Notes: Tracks your characters' and your Battle.net friends' levels, professions, and location.
+## Version: 0.2.0
 ## SavedVariables: WoWForeverDB
+## SavedVariablesPerCharacter: WoWForeverCharDB
 
 Core.lua
+Serialize.lua
+Sync.lua
 UI.lua
+Minimap.lua

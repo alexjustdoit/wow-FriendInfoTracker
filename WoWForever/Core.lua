@@ -2,9 +2,14 @@ local ADDON_NAME = "WoWForever"
 WoWForever = WoWForever or {}
 local addon = WoWForever
 
-local SCHEMA_VERSION = 1
+local SCHEMA_VERSION = 2
 
 local REGION_NAMES = { [1] = "US", [2] = "KR", [3] = "EU", [4] = "TW", [5] = "CN" }
+addon.REGION_NAMES = REGION_NAMES
+
+-- Sections of a character record that carry their own updatedAt and are
+-- merged independently (latest updatedAt wins) when syncing with friends.
+addon.SECTIONS = { "identity", "level", "professions", "location" }
 
 local function GetRegion()
 	if GetCurrentRegionName then
@@ -28,26 +33,70 @@ local function GetCharacterID()
 end
 addon.GetCharacterID = GetCharacterID
 
+-- BattleTag of the logged-in Battle.net account. Cached in the DB because
+-- BNGetInfo() returns nil while Battle.net is disconnected.
+local function GetMyBattleTag()
+	local _, battleTag = BNGetInfo()
+	if battleTag then
+		WoWForeverDB.myBattleTag = battleTag
+	end
+	return WoWForeverDB.myBattleTag
+end
+addon.GetMyBattleTag = GetMyBattleTag
+
+local function MigrateDB()
+	local db = WoWForeverDB
+	if db.schemaVersion < 2 then
+		-- v1 only ever stored this account's own characters.
+		for _, record in pairs(db.characters) do
+			record.isMine = true
+			for _, section in ipairs(addon.SECTIONS) do
+				if record[section] then
+					record[section].source = "self"
+				end
+			end
+			if record.identity and not record.identity.updatedAt then
+				record.identity.updatedAt = (record.level and record.level.updatedAt) or time()
+			end
+		end
+		db.schemaVersion = 2
+	end
+end
+
 local function InitDB()
 	WoWForeverDB = WoWForeverDB or {}
 	WoWForeverDB.schemaVersion = WoWForeverDB.schemaVersion or SCHEMA_VERSION
 	WoWForeverDB.characters = WoWForeverDB.characters or {}
-	-- Future schema migrations go here, keyed off WoWForeverDB.schemaVersion.
+	MigrateDB()
+	WoWForeverCharDB = WoWForeverCharDB or {}
 end
 
 local function GetCharacterRecord()
 	local id = GetCharacterID()
 	WoWForeverDB.characters[id] = WoWForeverDB.characters[id] or {}
-	return WoWForeverDB.characters[id], id
+	local record = WoWForeverDB.characters[id]
+	record.isMine = true
+	return record, id
 end
 addon.GetCharacterRecord = GetCharacterRecord
 
+-- Queues the record for pushing to online friends and redraws the window.
+local function OnRecordChanged(id)
+	if addon.MarkDirty then
+		addon.MarkDirty(id)
+	end
+	if addon.RefreshFrame then
+		addon.RefreshFrame()
+	end
+end
+
 local function CaptureIdentity()
-	local record = GetCharacterRecord()
+	local record, id = GetCharacterRecord()
 	local _, name, realm, region = GetCharacterID()
 	local _, classToken = UnitClass("player")
 	local _, raceToken = UnitRace("player")
 	local faction = UnitFactionGroup("player")
+	record.owner = GetMyBattleTag()
 	record.identity = {
 		name = name,
 		realm = realm,
@@ -57,23 +106,28 @@ local function CaptureIdentity()
 		race = raceToken,
 		faction = faction,
 		guid = UnitGUID("player"),
+		updatedAt = time(),
+		source = "self",
 	}
+	OnRecordChanged(id)
 end
 
 local function CaptureLevel()
-	local record = GetCharacterRecord()
+	local record, id = GetCharacterRecord()
 	record.level = {
 		value = UnitLevel("player"),
 		updatedAt = time(),
+		source = "self",
 	}
+	OnRecordChanged(id)
 end
 
 -- GetProfessions() returns up to five slot indices: two primary, then
 -- archaeology/fishing/cooking. GetProfessionInfo's 7th return value is the
 -- skillLineID, which we use as the stable key (e.g. 164 = Blacksmithing).
 local function CaptureProfessions()
-	local record = GetCharacterRecord()
-	local professions = { updatedAt = time() }
+	local record, id = GetCharacterRecord()
+	local professions = { updatedAt = time(), source = "self" }
 
 	local prof1, prof2, archaeology, fishing, cooking = GetProfessions()
 	local slots = {
@@ -99,10 +153,11 @@ local function CaptureProfessions()
 	end
 
 	record.professions = professions
+	OnRecordChanged(id)
 end
 
 local function CaptureLocation()
-	local record = GetCharacterRecord()
+	local record, id = GetCharacterRecord()
 	local inInstance, instanceType = IsInInstance()
 	record.location = {
 		zone = GetZoneText(),
@@ -111,7 +166,9 @@ local function CaptureLocation()
 		inInstance = inInstance,
 		instanceType = inInstance and instanceType or nil,
 		updatedAt = time(),
+		source = "self",
 	}
+	OnRecordChanged(id)
 end
 addon.CaptureLocation = CaptureLocation
 

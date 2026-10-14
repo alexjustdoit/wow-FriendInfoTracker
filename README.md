@@ -1,106 +1,146 @@
 # WoW Forever
 
-A WoW addon + companion services for tracking account-level and character-level
-data (names, levels, professions, location) across your own characters and
-opted-in friends', viewable in-game and on a shared web dashboard.
+A WoW addon for tracking character data (names, levels, professions,
+location) across your own characters and your Battle.net friends'. Everything
+can be viewed in-game.
 
-**Status:** planning only — nothing has been built yet.
+**Status:** v1 (addon-only) built, but not yet tested in a live client.
+v2 (uploader agent + web dashboard) is planned only.
 
-## Hard constraint that shapes everything
+## v1 principle: the addon is the whole product
 
-WoW's Lua addon sandbox cannot make network calls or write arbitrary files.
-It can only read/write its own SavedVariables, and only at `/reload` or
-logout. Any "push to an external service" feature therefore always requires
-a second piece of software outside the game — there is no single-file
-solution.
+Installing the addon is the only setup. There's no companion app, server or
+account.
 
-## Architecture
+WoW's Lua sandbox can't make network calls or write files outside its own
+SavedVariables. So in v1 the data never leaves the game. It moves between
+friends' copies of the addon over Battle.net's in-game addon messaging, and
+each player keeps a local cache. A web view (and anything else outside the
+game) needs a separate program, which is what v2 adds.
+
+## How data moves (v1)
 
 ```
-[WoW Addon]  (Lua, in-game, opted-in friends only)
-     |  writes to local SavedVariables on /reload or logout
-     v
-[Uploader Agent]  (small background script, opted-in friends' own machines)
-     |  reads that file, POSTs to the ingest API with a personal token
-     v
-[Central Web Server]  (runs on your Mac, exposed via Cloudflare Tunnel)
-     ^
-     |  pulls on a schedule, no install needed by anyone
-[Roster Puller]  (your server, queries Blizzard's Profile API for every known character+realm)
+ [Alice's addon] <--BNet--> [Bob's addon] <--BNet--> [Cara's addon]
+   cache: A, B, C              cache: A, B, C           cache: A, B, C
 ```
 
-Three independent pieces, replaceable without touching the others.
+- **Capture:** each addon records its own account's characters on login,
+  level-up, profession change and zone change (see capture triggers below).
+- **Sync:** when two Battle.net friends running the addon are online at the
+  same time, they swap everything they know. That includes data relayed from
+  other friends.
+- **Relay (store-and-forward):** Alice and Cara never need to be online
+  together. If Bob overlaps with each of them, Alice's data reaches Cara
+  through Bob. Records keep the timestamp of when the *owner's* addon captured
+  them, so relayed data is never mistaken for newer than it is.
+- **Cache:** everything received is stored in the local `WoWForeverDB`. The
+  window reads from that cache, so it works when nobody else is online.
+- **Freshness:** each record is only as current as the newest copy held by
+  anyone you overlap with. If nobody connects you to a friend, their data goes
+  stale. The UI always shows how old each record is and where it came from.
 
-## Data tiers, per friend
+### Who you sync with
 
-- **Tier 1 (always on, zero install):** name, class, race, level,
-  professions — pulled from Blizzard's official Game Data/Profile API on a
-  schedule (e.g. hourly). No addon, no agent, nothing on the friend's
-  machine. Just needs their character name + realm + region added to a
-  roster.
-- **Tier 2 (opt-in):** current/last-known location, and anything else only
-  visible in-game — requires that friend to install the WoW addon *and* the
-  uploader agent. Each opted-in friend gets their own upload token so one
-  friend's agent can never overwrite another's data.
+There's no setup and no group configuration: **every Battle.net friend running
+the addon** syncs automatically, over Battle.net only (no guild channel).
+Because data is relayed, it can reach friends-of-friends you aren't directly
+connected to.
 
-"Mixed, opt-in per friend" = every friend gets Tier 1 automatically; Tier 2
-is opt-in on top.
+### Friends without the addon (passive capture)
 
-## Server hosting & access
+For online Battle.net friends who don't run the addon, the friend list gives
+the current character's **name, realm, level, class, race and zone**. That data
+is cached and relayed the same way. **Professions are never available** for
+these friends: no in-game API exposes them.
 
-- Server runs locally (your own Mac), exposed to friends via **Cloudflare
-  Tunnel** — no open router ports, no VPN for friends to install, just a
-  normal HTTPS URL.
-- Auth is a single shared password for v1, implemented as app-level
-  middleware (not Cloudflare Access) so it's a clean seam to swap in
-  per-user accounts/permissions later without a rewrite.
-- v1 behavior: everyone who has the password sees everyone's data. Per-user
-  visibility rules are a planned v2 addition, not a v1 feature.
+A friend only falls back to friend-list capture after they've ignored a PING
+for 30 seconds. Capturing them earlier would stamp friend-list data as newer
+than their real addon data, which is about to arrive.
 
-## Addon internal data model
+### Sync protocol
 
-One account-wide SavedVariables table, `WoWForeverDB` (declared via
-`## SavedVariables: WoWForeverDB` in the TOC — not per-character, so every
-alt on the account can see every other alt's last-captured data). A second,
-per-character table (`WoWForeverCharDB`) holds pure UI prefs, kept separate
-so the uploader agent only ever has to parse one well-defined data table.
+All messages go over `BNSendGameData` with prefix `WoWF`, as
+`<protocol>:<TYPE>:<msgID>:<seq>:<total>:<chunk>`. Payloads are serialized
+tables (see `Serialize.lua`), split into chunks of up to 3800 bytes on UTF-8
+boundaries and sent through a paced queue.
+
+| Message | Meaning |
+|---|---|
+| `PING` | Sent once per session to every online WoW friend |
+| `PONG` | Reply to a `PING`: "I run the addon" |
+| `DIGEST` | `{ [characterID] = { identityAt, levelAt, professionsAt, locationAt } }` |
+| `DATA` | `{ [characterID] = record }`, only what's newer than the peer's digest |
+
+After a `PING`/`PONG` both sides send their digest, and each side sends what
+the other is missing. Later changes (your own captures, or newly merged data)
+are pushed as `DATA` to every online peer after a 30-second debounce. That
+push is what relays data onward. Once both sides are in sync no more messages
+are sent, because a merge only accepts strictly newer data.
+
+**Merge rule:** per section (identity / level / professions / location), the
+newer `updatedAt` wins. Data from others never overwrites your own account's
+characters.
+
+**Untrusted input:** everything received is parsed by a non-executing
+deserializer with depth and size limits. Each record is then rebuilt from
+known fields only, with type checks, string length caps, timestamps clamped
+to at most 1 hour in the future, and identity checked against the record id.
+UI markup (`|`) is escaped when displayed. The sender's identity is
+authenticated by Battle.net, but relayed data is only as honest as whoever
+relayed it. That's acceptable for a friend group.
+
+## Addon data model
+
+`WoWForeverDB` is account-wide (`## SavedVariables`) and holds your own
+characters and every cached friend character. `WoWForeverCharDB` is
+per-character and holds UI preferences only (minimap button position and
+visibility).
 
 ```lua
 WoWForeverDB = {
-  schemaVersion = 1,
+  schemaVersion = 2,
+  myBattleTag = "Thrall#1234",
   characters = {
-    ["Thrall-StormrageUS-US"] = {
+    ["Thrall-Stormrage-US"] = {
+      isMine = true,                    -- local only, never sent
+      owner = "Thrall#1234",
       identity = {
-        name = "Thrall", realm = "StormrageUS", realmDisplay = "Stormrage",
+        name = "Thrall", realm = "Stormrage", realmDisplay = "Stormrage",
         region = "US", class = "WARRIOR", race = "Orc", faction = "Horde",
-        guid = "Player-1234-00001234",
+        guid = "Player-1234-00001234", updatedAt = 1759903200, source = "self",
       },
-      level = { value = 80, updatedAt = 1759903200 },
+      level = { value = 80, updatedAt = 1759903200, source = "self" },
       professions = {
         ["164"] = { name = "Blacksmithing", type = "primary", rank = 100, maxRank = 100 },
         ["185"] = { name = "Cooking", type = "secondary", rank = 75, maxRank = 100 },
-        updatedAt = 1759900000,
+        updatedAt = 1759900000, source = "self",
       },
       location = {
         zone = "Stormwind City", subzone = "Trade District", mapID = 84,
-        inInstance = false, instanceType = nil, updatedAt = 1759903180,
+        inInstance = false, updatedAt = 1759903180, source = "self",
       },
-      meta = { addonVersion = "1.0.0", lastLogout = 1759903200 },
+      meta = { addonVersion = "0.2.0", lastLogout = 1759903200 },  -- local only
+    },
+    ["Jaina-Proudmoore-US"] = {
+      owner = "Jaina#5678",
+      receivedFrom = "Bob#2222",          -- relayed: receivedFrom ~= owner
+      receivedAt = 1759904000,
+      level = { value = 80, updatedAt = 1759899000, source = "addon" },
+      -- ...same sections as above
     },
   },
 }
 ```
 
-Design rules chosen so the Python uploader agent can parse this reliably:
-
-- String keys everywhere (characters keyed by `name-realm-region`,
-  professions keyed by stable `skillLineID`) — never relying on Lua's
-  array/hash ambiguity or table order.
-- Flat-ish nesting, no functions/metatables.
-- Normalized realm name (`GetNormalizedRealmName()`) in the id, with the
-  pretty display name stored separately.
-- `schemaVersion` at the root so the agent can version its parsing logic as
-  fields are added in v1.5/v2.
+- `source` is per section: `self` (captured on this account), `addon`
+  (captured by the owner's addon), or `bnet` (seen in the friend list).
+- Characters are keyed `Name-NormalizedRealm-Region`, and professions are
+  keyed by `skillLineID`. String keys everywhere, flat nesting, no functions
+  or metatables, so the v2 agent can parse the file reliably.
+- Schema v1 → v2 migration runs on load: existing records are marked
+  `isMine`, sections get `source = "self"`, and identity gets an
+  `updatedAt`.
 
 ### Capture triggers
 
@@ -111,214 +151,232 @@ Design rules chosen so the Python uploader agent can parse this reliably:
 | `SKILL_LINES_CHANGED` | professions |
 | `TRADE_SKILL_SHOW` (profession window opened) | professions (catches max-rank increases) |
 | `ZONE_CHANGED_NEW_AREA` / `ZONE_CHANGED` | location |
-| `PLAYER_LOGOUT` | final location snapshot |
+| `PLAYER_LOGOUT` | final location snapshot (stored locally; too late to send) |
 
-## Central web server: data store & API
+## In-game UI
 
-**Data store:** SQLite — single host, friend-group scale, low write volume,
-zero ops, trivial to back up. Keeps the whole server a single process,
-matching the "locally hosted, low friction" goal.
+- **Entry points:** `/wowf` (or `/wowforever`) and a draggable minimap
+  button. Data capture is silent, and the window only opens on demand.
+- **Commands:** `/wowf sync` (re-sync now), `/wowf status` (online friends
+  running the addon), `/wowf minimap` (show/hide the button).
+- **Layout:** grouped by owner, with "Your characters" first and then each
+  friend by BattleTag. Each row shows name (class-colored), level, zone,
+  professions and how old the data is. The current character is highlighted,
+  and rows older than 7 days are dimmed.
+- **Row tooltip:** realm, owner, full profession ranks, and each section's
+  age and source ("this account", "their addon", "relayed via Bob",
+  "friend list").
+- **Hygiene:** Blizzard's own templates (no UI library), frame created
+  lazily, standalone frame only, no hooks into Blizzard UI, so no taint.
 
-**Schema:**
+## Files
 
-```
-friends            id, display_name, created_at
+| File | Purpose |
+|---|---|
+| `WoWForever/Core.lua` | DB init/migration, capture of own characters |
+| `WoWForever/Serialize.lua` | Dependency-free serializer and defensive deserializer |
+| `WoWForever/Sync.lua` | Friend scan, passive capture, sync protocol, merge |
+| `WoWForever/UI.lua` | Main window, tooltips, slash commands |
+| `WoWForever/Minimap.lua` | Minimap button |
+| `tests/sim.lua` | Out-of-game simulation: several stubbed clients wired over a fake Battle.net transport |
 
-characters         id, friend_id (FK), name, realm, realm_display, region,
-                    class, race, faction, guid,
-                    level, level_updated_at, level_source,       -- tier1 | tier2
-                    zone, subzone, map_id, in_instance, instance_type,
-                    location_updated_at,                          -- tier2 only
-                    created_at
+Run the simulation with `lua tests/sim.lua WoWForever` from the repo root.
+It covers direct sync, relay without overlap, passive capture, live pushes,
+own-record protection, hostile and malformed input, large multi-chunk syncs,
+and no traffic once in sync. It runs on desktop Lua, not WoW's client, so it
+checks the logic but not the WoW API behaviour.
 
-professions        id, character_id (FK), skill_line_id, name, type,
-                    rank, max_rank, updated_at
+## Verify in a live client
 
-upload_tokens      token_hash, friend_id (FK), created_at, revoked_at
+These API assumptions can't be tested outside the game:
 
-roster_entries     name, realm, region, friend_id (pre-ingest roster list
-                    the puller job walks; becomes a `characters` row once
-                    first pulled)
-```
-
-`characters` holds both tiers' data in one row per character —
-`location_*` fields stay null until that friend opts into Tier 2.
-`professions` is its own table since the count varies per character.
-
-**Conflict rule between tiers:** per field, the most recent `updated_at`
-wins regardless of source, and the UI shows which source it came from
-(API vs. in-game) so staleness is never hidden.
-
-**API surface:**
-
-| Endpoint | Caller | Purpose |
-|---|---|---|
-| `POST /api/login` | browser | password check → signed session cookie |
-| `GET /api/characters` | browser (dashboard) | unified read of all characters + professions, session-gated |
-| `POST /api/roster` | browser (host, or self-service later) | add a friend + character name/realm/region for Tier 1 pulling |
-| `GET /api/roster` | browser | list current roster for management UI |
-| `POST /api/ingest` | uploader agent | upsert Tier 2 data, `Authorization: Bearer <token>` → resolves to a friend, validated against that friend's known characters |
-| *(internal, no route)* | scheduled job | roster puller — walks `roster_entries`, calls Blizzard's Profile API, upserts with `level_source = tier1` |
-
-**Stack:** Python (FastAPI + SQLite) — consistent with the Python tooling
-already used elsewhere, and FastAPI's request validation keeps the ingest
-endpoint (the one surface untrusted friend-run agents talk to) robust by
-default. Frontend for v1 can be one static HTML page fetching
-`/api/characters` and rendering a table — no JS framework needed at this
-scale.
-
-**Security:**
-
-- Shared password stored as a bcrypt hash, not plaintext.
-- Session cookie: signed, `HttpOnly`, `Secure` (real HTTPS via Cloudflare
-  Tunnel's TLS termination).
-- Upload tokens: random, stored hashed server-side, individually revocable
-  per friend from the dashboard.
-- Cloudflare Tunnel credentials/config live outside the repo, never
-  committed.
-
-## Uploader agent packaging
-
-**Language/build:** Python + PyInstaller, built via a GitHub Actions matrix
-(`macos-latest` + `windows-latest` runners) triggered on release — one
-codebase shared with the server, and CI solves the cross-build problem
-without needing to own a Windows machine.
-
-**Distribution:** not GitHub Releases — served from your own web
-dashboard's onboarding page so non-technical friends never need a GitHub
-account. The page generates a **personalized bundle per friend**: clicking
-"opt in for live location" creates their upload token and hands back a zip
-with the binary + a `config.json` pre-filled with their token and server
-URL — no manual copy-pasting.
-
-**OS security warnings — accept them, don't pay to remove them:** macOS
-Gatekeeper and Windows SmartScreen will both flag an unsigned/unrecognized
-binary once per machine (right-click → Open; "More info" → "Run anyway").
-Real signing/notarization costs ~$99/yr (Apple) and ~$100–400/yr (Windows
-cert) — not worth it for a friend-group tool. The onboarding page should
-show these click-through steps up front so they're not alarming.
-
-**Finding the SavedVariables file:** auto-detect common install paths
-(Mac: `/Applications/World of Warcraft`; Windows: default path or the
-registry key Battle.net's installer writes), then scan all
-`WTF/Account/*/SavedVariables/WoWForever.lua` paths under that install
-(friends can have more than one WoW account and won't know the internal
-account folder name). Only ask for a manual path if auto-detect fails.
-
-**Trigger:** poll the file's mtime every few minutes rather than OS-level
-file-watching — simpler, no platform-specific quirks, and no responsiveness
-lost since the source data only changes on `/reload`/logout anyway.
-
-**Run mode:** manual launch for v1, not auto-start on login — a background
-process that silently reads files and phones home benefits from being
-visible while trust in the tool is still new. Auto-start (LaunchAgent /
-Startup folder) is reasonable v1.5 polish. Either way, show a minimal
-status indicator (tray icon or simple log: "last upload: success at
-3:41pm") so no one is left wondering if it's working.
-
-**Failure handling:** retry with backoff and fail silently if the server's
-unreachable (tunnel down, host's Mac asleep); show a clear "waiting for
-WoW Forever addon data..." state if the SavedVariables file doesn't exist
-yet.
-
-**Trust/privacy messaging:** the onboarding page should plainly state what
-it reads (only the `WoWForeverDB` table) and doesn't (nothing else on their
-computer), plus how to stop — delete the app locally, or you revoke their
-token from the dashboard instantly.
-
-## Roster puller (Blizzard API integration)
-
-**Open question to settle first (a 10-minute spike, not a build phase):**
-do the character profile/professions endpoints work with app-level client
-credentials for any public character (Branch A — what the whole Tier 1
-"zero friction" design assumes), or do they require each character
-owner's own Battle.net OAuth consent (Branch B — would make Tier 1 a
-one-time "log in with Battle.net" click instead of fully zero-friction)?
-Rest of this section assumes Branch A.
-
-**One-time setup:** register an application at Blizzard's developer
-portal for a `client_id`/`client_secret`, stored outside the repo like the
-Tunnel credentials.
-
-**Token handling:** client-credentials grant, cached and refreshed
-(~24h lifetime) rather than fetched per call.
-
-**Per-character calls:** Character Profile Summary (level, class, race,
-faction, guild) and Character Professions Summary (primary/secondary with
-tiers), both against region-specific hosts (`us.api.blizzard.com`, etc.)
-picked from the roster entry's region. Both need the realm **slug**
-(lowercase, hyphenated), resolved once via the Realm Index endpoint and
-cached rather than guessed, since some realm names don't transform
-predictably. Character name must be lowercased in the URL path.
-
-**Scheduled job:** runs inside the same FastAPI process (e.g. APScheduler),
-hourly by default — far under Blizzard's rate limits even with a generous
-roster. Small delay between calls to be a polite API citizen.
-
-**Per-character error handling:**
-
-| Response | Meaning | Handling |
-|---|---|---|
-| 404 | Name/realm/region typo, or character doesn't exist | Surface in roster UI as "not found — check spelling/realm" |
-| Empty/hidden profile | Character has armory visibility disabled in-game | Surface distinctly as "profile hidden by privacy setting" |
-| Expired token mid-run | Normal token lifecycle | Refresh once, retry |
-| Transient network error | — | Skip this character this cycle, retry next run, log it |
-
-## In-game addon UI
-
-**Scope boundary:** shows only *this account's* characters — the addon has
-no network access, so it can only render what's in its own local
-`WoWForeverDB`. Seeing everyone is the web dashboard's job. (Future idea,
-not v1: the uploader agent could download the aggregated dashboard data and
-inject it as a second, read-only SavedVariables table the addon also
-displays — closing the loop back into the game.)
-
-**Entry points:** slash command (`/wowf`) plus a minimap button. No
-auto-popup on login — data capture stays silent; the window only appears
-on demand.
-
-**Window & layout:** built with Blizzard's own shared UI templates
-(`BackdropTemplateMixin`, `UIPanelTemplates`, inset frame templates) rather
-than a UI library — fewer embedded dependencies to maintain, and it stays
-visually consistent with the game automatically across expansions.
-
-**Content:** one row per character — name (class-colored), level,
-current/last-known zone, a condensed profession summary, and a relative
-last-updated time. Sortable by column. Clicking a row opens a side detail
-pane with the full profession breakdown (using Blizzard's own profession
-icons). The currently-logged-in character's row is visually distinct;
-stale rows get a visual de-emphasis, mirroring the freshness concept from
-the data model.
-
-**Technical hygiene:** frame created lazily on first `/wowf` call, not at
-load; standalone frame only, no hooking into Blizzard's default UI — avoids
-addon taint entirely.
-
-**Ongoing maintenance:** the TOC's `## Interface:` version needs a one-line
-bump on major patches or the addon gets disabled as "out of date," even
-when no Lua logic is affected. Not a design flaw, just a recurring chore.
-
-## Things to verify before building (not blockers, just unknowns)
-
-- **Armory privacy setting:** if a friend has WoW's armory/profile
-  visibility toggle off, Blizzard's Profile API may return nothing for them
-  regardless of our API credentials.
-- **Auth type for the Profile API:** need to confirm app-level client
-  credentials are sufficient for character profile/professions endpoints
-  (Branch A above), vs. requiring each friend's own Battle.net OAuth
-  consent (Branch B).
-- **Blizzard API rate limits** across a whole friend roster — fine at
-  friend-group scale with sane polling intervals (hourly, not per-minute).
-- **SavedVariables write cadence** — Tier 2 location data is only as fresh
-  as a friend's last `/reload`/logout, not truly live.
+- `BN_CHAT_MSG_ADDON` args are `(prefix, text, channel, senderGameAccountID)`
+  and `BNSendGameData(gameAccountID, prefix, text)` is still the send call.
+  The ~4KB message cap and Battle.net's throttle limits (the queue sends one
+  message every 0.3s) also need checking.
+- Whether `C_ChatInfo.RegisterAddonMessagePrefix` is needed for Battle.net
+  game data (it's called anyway).
+- `C_BattleNet.GetFriendGameAccountInfo` fields used: `gameAccountID`,
+  `isOnline`, `clientProgram`, `wowProjectID`, `isInCurrentRegion`,
+  `characterName`, `realmName`, `regionID`, `characterLevel`, `className`,
+  `raceName`, `factionName`, `areaName`, `playerGuid`.
+- Passive capture builds realm keys by removing spaces and hyphens from
+  `realmName`. That has to match `GetNormalizedRealmName()`, or a friend who
+  later installs the addon will show up twice.
+- `PLAYER_LEVEL_UP` timing: `UnitLevel("player")` may still report the old
+  level when the event fires (the new level is the event's first argument).
+- TOC `## Interface:` needs a bump on major patches.
 
 ## Roadmap
 
-- **v1:** roster-based Tier 1 dashboard (name/level/professions) behind the
-  shared password, Cloudflare Tunnel exposure, schema ready for Tier 2 and
-  future permissions.
-- **v1.5:** addon + uploader agent for opted-in friends (adds location),
-  packaged low-friction for Mac/Windows.
-- **v2:** per-user accounts/permissions, more fields (gold, bags, M+/raid
-  progress — the latter maybe better sourced from Raider.io's API than the
-  addon), nicer UI.
+- **v1 (built):** addon-only. Own capture, Battle.net peer sync with relay,
+  passive friend-list capture, grouped in-game window, minimap button.
+- **v1.x ideas:** export window (copyable CSV for spreadsheets), a detail
+  pane, sortable columns, `/wowf forget <BattleTag>` to clear a friend's
+  cached data.
+- **v2:** uploader agent + central server + web dashboard (below).
+
+---
+
+# v2 plan: uploader agent, server, web dashboard
+
+v2 is an **optional** layer on top of the addon. It doesn't change v1: friends
+who only install the addon keep working exactly as before. v2 adds a web view
+outside the game and Blizzard-API data that doesn't need anyone online.
+
+## Architecture
+
+```
+[WoW Addon]  (unchanged from v1; syncs in-game with BNet friends)
+     |  writes WoWForeverDB on /reload or logout
+     v
+[Uploader Agent]  (each opted-in friend's own machine)
+     |  reads its own account's records, POSTs to the ingest API with a personal token
+     v
+[Central Web Server]  (runs on your Mac, exposed via Cloudflare Tunnel)
+     ^
+     |  pulls on a schedule, no install needed by anyone
+[Roster Puller]  (queries Blizzard's Profile API for every known character+realm)
+```
+
+## Who runs the agent: every opted-in friend
+
+Each friend who wants their data on the dashboard runs their own agent. The
+agent uploads **only that account's own records** (`isMine = true`). It
+doesn't upload the relayed cache, even though the cache holds other friends'
+data too. Reasons:
+
+- Each upload token is bound to one friend, and the server checks uploads
+  against that friend's known characters. Relayed records belong to someone
+  else and can't be checked that way.
+- Data on the dashboard always comes straight from its owner's machine, so
+  relayed data can't spoof it.
+- Freshness: a friend's dashboard data updates on their own `/reload`/logout,
+  without waiting for someone to relay it.
+
+Friends who don't run the agent still appear on the dashboard through the
+roster puller (Blizzard API: level, class, professions), just without
+location.
+
+## Data tiers on the dashboard
+
+- **Tier 1 (zero install):** name, class, race, level, professions from
+  Blizzard's Profile API, pulled hourly from a roster of name + realm +
+  region.
+- **Tier 2 (opt-in agent):** adds last-known location and anything else only
+  visible in-game, uploaded by that friend's agent.
+
+**Conflict rule:** per field, the most recent `updated_at` wins regardless of
+source, and the UI shows the source (API vs. in-game), so staleness is never
+hidden. This is the same per-section rule the addon uses.
+
+## Server hosting & access
+
+- Runs on your Mac, exposed via **Cloudflare Tunnel**: no open router ports,
+  no VPN for friends, just an HTTPS URL.
+- A single shared password for v2.0, implemented as app-level middleware
+  (not Cloudflare Access) so it can become per-user accounts later.
+- Everyone with the password sees everyone's data. Per-user visibility is a
+  later addition.
+
+## Data store & API
+
+**SQLite**: single host, friend-group scale, low write volume, zero ops.
+
+```
+friends            id, display_name, battle_tag, created_at
+
+characters         id, friend_id (FK), name, realm, realm_display, region,
+                    class, race, faction, guid,
+                    level, level_updated_at, level_source,       -- api | addon
+                    zone, subzone, map_id, in_instance, instance_type,
+                    location_updated_at,                          -- addon only
+                    created_at
+
+professions        id, character_id (FK), skill_line_id, name, type,
+                    rank, max_rank, updated_at, source
+
+upload_tokens      token_hash, friend_id (FK), created_at, revoked_at
+
+roster_entries     name, realm, region, friend_id
+```
+
+| Endpoint | Caller | Purpose |
+|---|---|---|
+| `POST /api/login` | browser | password → signed session cookie |
+| `GET /api/characters` | dashboard | all characters + professions, session-gated |
+| `POST /api/roster` / `GET /api/roster` | browser | manage Tier 1 roster |
+| `POST /api/ingest` | uploader agent | upsert the friend's own records, `Authorization: Bearer <token>`; rejects characters not belonging to that friend |
+| *(internal)* | scheduled job | roster puller |
+
+**Stack:** Python (FastAPI + SQLite). FastAPI's request validation protects
+the ingest endpoint, which is the one surface untrusted agents talk to. The
+frontend is one static HTML page rendering `/api/characters`.
+
+**Security:** password stored as a bcrypt hash; signed `HttpOnly` + `Secure`
+cookie; upload tokens random, stored hashed, revocable per friend; Tunnel
+credentials kept outside the repo.
+
+## Uploader agent
+
+- **Build:** Python + PyInstaller via a GitHub Actions matrix
+  (`macos-latest`, `windows-latest`), triggered on release.
+- **Distribution:** from the dashboard's onboarding page, not GitHub
+  Releases. "Opt in" creates the friend's token and returns a zip with the
+  binary plus a pre-filled `config.json` (token + server URL).
+- **OS warnings:** unsigned. Accept the one-time Gatekeeper/SmartScreen
+  click-through and document it on the onboarding page, rather than paying
+  ~$200–500/yr for signing.
+- **Finding the file:** auto-detect the install (Mac
+  `/Applications/World of Warcraft`; Windows default path or the Battle.net
+  registry key), then scan `WTF/Account/*/SavedVariables/WoWForever.lua`
+  (there may be several accounts). Ask for a path only if detection fails.
+- **Parsing:** a minimal Lua-table parser for the SavedVariables format,
+  driven by `schemaVersion`. Upload only `isMine` records.
+- **Trigger:** poll the file's mtime every few minutes. The data only changes
+  on `/reload`/logout anyway.
+- **Run mode:** manual launch at first, with a visible status ("last upload:
+  success at 3:41pm"). Auto-start (LaunchAgent / Startup folder) later.
+- **Failures:** retry with backoff, and fail silently if the server is
+  unreachable. Show a clear "waiting for WoW Forever addon data..." state if
+  the file doesn't exist yet.
+- **Trust messaging:** the onboarding page states plainly that the agent
+  reads only `WoWForeverDB` and uploads only your own characters. To stop,
+  delete the app, or the host revokes the token.
+
+## Roster puller (Blizzard API)
+
+**Settle first (10-minute spike):** do the character profile and professions
+endpoints work with app-level client credentials (Branch A, assumed here),
+or do they need each owner's Battle.net OAuth consent (Branch B, a one-time
+"log in with Battle.net" click)?
+
+- Register a Blizzard developer app (`client_id`/`client_secret` kept
+  outside the repo). Use the client-credentials grant, with the ~24h token
+  cached and refreshed.
+- Per character: Profile Summary + Professions Summary on the region host
+  (`us.api.blizzard.com`, …). Realm **slug** resolved via the Realm Index and
+  cached; character name lowercased.
+- Hourly via APScheduler in the FastAPI process, with a small delay between
+  calls.
+
+| Response | Handling |
+|---|---|
+| 404 | Roster UI: "not found — check spelling/realm" |
+| Empty/hidden profile | Roster UI: "profile hidden by privacy setting" |
+| Expired token | Refresh once, retry |
+| Transient error | Skip this cycle, log, retry next run |
+
+## Closing the loop (v2+ idea)
+
+The agent could also download the dashboard's aggregated data and write it
+into a second, read-only SavedVariables table for the addon to show. That
+would merge API-sourced professions for non-addon friends into the in-game
+window.
+
+## Open questions for v2
+
+- Branch A vs. B for the Profile API (above).
+- Armory privacy toggle: hidden profiles may return nothing from the API.
+- Whether dashboard visibility should follow Battle.net friendships
+  (matching in-game sharing) or stay "everyone with the password".
