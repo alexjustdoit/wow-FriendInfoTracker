@@ -6,8 +6,9 @@ local addon = FriendInfoTracker
 -- Protocol (all over BNSendGameData, prefix "FIT"):
 --   PING    sent to every online WoW friend once per session
 --   PONG    reply to a PING; tells the sender we run the addon
---   DIGEST  { [characterID] = { identityAt, levelAt, professionsAt, locationAt } }
---   DATA    { [characterID] = record } -- only records newer than the peer's digest
+--   DIGEST  { [characterID] = { identityAt, levelAt, professionsAt, locationAt, recipesAt } }
+--   DATA    { [characterID] = record } -- only records newer than the peer's digest,
+--           split across several messages when large
 -- After PING/PONG both sides exchange digests, then each sends what the other
 -- lacks. Changes made later (own captures, merged data) are pushed as DATA to
 -- every known peer after a short debounce, which is what relays data onward.
@@ -15,7 +16,7 @@ local addon = FriendInfoTracker
 -- Wire format per message: "<protocol>:<TYPE>:<msgID>:<seq>:<total>:<chunk>"
 
 local PREFIX = "FIT"
-local PROTOCOL = "1"
+local PROTOCOL = "2"
 local CHUNK_SIZE = 3800 -- BNSendGameData caps a message at ~4KB
 local SEND_INTERVAL = 0.3 -- seconds between queued messages
 local SCAN_INTERVAL = 60 -- seconds between friend-list scans
@@ -26,6 +27,9 @@ local BNET_REFRESH_SECONDS = 30 * 60 -- passive capture rewrites unchanged data 
 local REASSEMBLY_TIMEOUT = 120
 local MAX_CHUNKS = 200
 local MAX_RECORDS_PER_MESSAGE = 2000
+local DATA_BATCH_BYTES = 32 * 1024 -- target serialized size per DATA message
+local MAX_PROFESSIONS = 12
+local MAX_RECIPES_PER_PROFESSION = 1000
 local MAX_FUTURE_SKEW = 3600 -- clamp timestamps further in the future than this
 
 local SECTIONS = addon.SECTIONS
@@ -160,17 +164,37 @@ local SANITIZERS = {
 	level = function(data)
 		return { value = Num(data.value) }
 	end,
+	-- Keyed by profession name.
 	professions = function(data)
 		local out, count = {}, 0
 		for key, prof in pairs(data) do
-			if type(key) == "string" and key:match("^%d+$") and type(prof) == "table" and count < 10 then
+			if type(key) == "string" and #key <= 64 and type(prof) == "table" and count < MAX_PROFESSIONS then
 				count = count + 1
 				out[key] = {
-					name = Str(prof.name),
+					name = Str(prof.name) or key,
 					type = prof.type == "primary" and "primary" or "secondary",
 					rank = Num(prof.rank),
 					maxRank = Num(prof.maxRank),
+					skillLine = Num(prof.skillLine),
 				}
+			end
+		end
+		return out
+	end,
+	-- { [professionName] = { recipeName, ... } }
+	recipes = function(data)
+		local out, count = {}, 0
+		for key, list in pairs(data) do
+			if type(key) == "string" and #key <= 64 and type(list) == "table" and count < MAX_PROFESSIONS then
+				count = count + 1
+				local names = {}
+				for _, name in ipairs(list) do
+					if #names >= MAX_RECIPES_PER_PROFESSION then
+						break
+					end
+					names[#names + 1] = Str(name, 96)
+				end
+				out[key] = names
 			end
 		end
 		return out
@@ -247,6 +271,25 @@ end
 -- Pushing changes
 ---------------------------------------------------------------------------
 
+-- Sends records as one or more DATA messages of roughly DATA_BATCH_BYTES each,
+-- so a large sync never becomes a single oversized message.
+local function SendRecords(target, records)
+	local batch, batchBytes, any = {}, 0, false
+	for id, record in pairs(records) do
+		local bytes = #addon.Serialize(record) + #id
+		if any and batchBytes + bytes > DATA_BATCH_BYTES then
+			Send(target, "DATA", batch)
+			batch, batchBytes = {}, 0
+		end
+		batch[id] = record
+		batchBytes = batchBytes + bytes
+		any = true
+	end
+	if any then
+		Send(target, "DATA", batch)
+	end
+end
+
 local function Flush()
 	flushPending = false
 	local characters = FriendInfoTrackerDB.characters
@@ -259,7 +302,7 @@ local function Flush()
 			end
 		end
 		if any then
-			Send(target, "DATA", payload)
+			SendRecords(target, payload)
 		end
 	end
 	-- With no peers online, nothing is lost: the next digest exchange catches up.
@@ -501,7 +544,7 @@ local function HandleMessage(senderID, msgType, body)
 		if type(digest) == "table" then
 			local payload, any = RecordsNewerThan(digest)
 			if any then
-				Send(senderID, "DATA", payload)
+				SendRecords(senderID, payload)
 			end
 		end
 	elseif msgType == "DATA" then

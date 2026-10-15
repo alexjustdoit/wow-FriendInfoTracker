@@ -26,12 +26,29 @@ local function advance(seconds)
 end
 
 local function stubFrame(env)
-	local f = { events = {}, scripts = {} }
+	local f = { events = {}, scripts = {}, shown = true, height = 0 }
+	local methods = {
+		RegisterEvent = function(self, e) self.events[e] = true end,
+		SetScript = function(self, n, fn) self.scripts[n] = fn end,
+		CreateTexture = function() return stubFrame(env) end,
+		CreateFontString = function() return stubFrame(env) end,
+		Show = function(self) self.shown = true if self.scripts.OnShow then self.scripts.OnShow(self) end end,
+		Hide = function(self)
+			local was = self.shown
+			self.shown = false
+			if was and self.scripts.OnHide then self.scripts.OnHide(self) end
+		end,
+		SetShown = function(self, v) if v then self:Show() else self:Hide() end end,
+		IsShown = function(self) return self.shown end,
+		SetHeight = function(self, h) self.height = h end,
+		GetHeight = function(self) return self.height end,
+		SetText = function(self, t) self.text = t end,
+		GetStringHeight = function() return 12 end,
+	}
 	local mt = {
 		__index = function(_, k)
-			if k == "RegisterEvent" then return function(self, e) self.events[e] = true end end
-			if k == "SetScript" then return function(self, n, fn) self.scripts[n] = fn end end
-			if k == "CreateTexture" or k == "CreateFontString" then return function() return stubFrame(env) end end
+			if methods[k] then return methods[k] end
+			if k:match("^Get") then return function() return 0 end end
 			return function() end
 		end,
 	}
@@ -61,7 +78,15 @@ local function newClient(spec)
 	env.strtrim = function(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 	env.time = function() return math.floor(clock) end
 	env.GetTime = function() return clock end
-	env.CreateFrame = function() return stubFrame(env) end
+	env.CreateFrame = function(_, name)
+		local f = stubFrame(env)
+		if name then env[name] = f end
+		return f
+	end
+	env.UISpecialFrames = {}
+	env.tinsert = table.insert
+	env.GameTooltip = stubFrame(env)
+	env.GameTooltip_Hide = function() end
 	env.C_Timer = {
 		After = function(d, fn) schedule(d, function() if client.online then fn() end end) end,
 		NewTicker = function(d, fn)
@@ -117,9 +142,11 @@ local function newClient(spec)
 		end,
 	}
 	client.sent = 0
+	client.texts = {}
 	env.BNSendGameData = function(target, prefix, text)
 		assert(#text <= 4078, "message too long: " .. #text)
 		client.sent = client.sent + 1
+		client.texts[#client.texts + 1] = text
 		local dest = byGameID[target]
 		schedule(0.05, function()
 			if dest.online and dest.hasAddon then
@@ -177,7 +204,7 @@ login(A); login(B); login(D)
 advance(120)
 local bobOnA = db(A)["Bobb-AreaFiftyTwo-US"]
 check("A has B's character", bobOnA ~= nil)
-check("A has B's profession rank", bobOnA and bobOnA.professions and bobOnA.professions["171"].rank == 90)
+check("A has B's profession rank", bobOnA and bobOnA.professions and bobOnA.professions["Alchemy"].rank == 90)
 check("B's data on A is marked direct from addon", bobOnA and bobOnA.level.source == "addon" and bobOnA.receivedFrom == "Bob#2222" and bobOnA.owner == "Bob#2222")
 check("B has A's character", db(B)["Alys-Stormrage-US"] ~= nil)
 check("isMine not leaked over wire", bobOnA and bobOnA.isMine == nil)
@@ -198,7 +225,7 @@ logout(A)
 login(C)
 advance(120)
 local alysOnC = db(C)["Alys-Stormrage-US"]
-check("C received A's data via B without overlapping A", alysOnC ~= nil and alysOnC.professions["171"].rank == 55)
+check("C received A's data via B without overlapping A", alysOnC ~= nil and alysOnC.professions["Alchemy"].rank == 55)
 check("C sees it as relayed via Bob", alysOnC and alysOnC.receivedFrom == "Bob#2222" and alysOnC.owner == "Alice#1111")
 check("C got D's passive data via relay", db(C)["Dano-Area52-US"] ~= nil)
 
@@ -216,25 +243,27 @@ local evil = Senv.FriendInfoTracker.Serialize({
 		identity = { name = "Other", realm = "Realm", region = "US", updatedAt = clock },
 		level = { value = 5, updatedAt = clock + 99999999, source = "addon" },
 		location = { zone = "|cffff0000red|r", updatedAt = clock },
-		professions = { ["171"] = { name = "X", rank = "lots" }, ["evil"] = { name = "Y" }, updatedAt = clock },
+		professions = { ["Alchemy"] = { name = "X", rank = "lots" }, [string.rep("e", 80)] = { name = "Y" }, updatedAt = clock },
+		recipes = { ["Alchemy"] = { "Elixir", 42, string.rep("r", 500) }, updatedAt = clock },
 	},
 	["bad id with no hyphens"] = { level = { value = 3, updatedAt = clock } },
 })
-fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DATA:999:1:1:" .. evil, "WHISPER", 22)
+fire(C, "BN_CHAT_MSG_ADDON", "FIT", "2:DATA:999:1:1:" .. evil, "WHISPER", 22)
 check("own record not overwritten", db(C)["Cara-Stormrage-US"].level.value == 60)
 local fake = db(C)["Fake-Realm-US"]
 check("future timestamp clamped", fake and fake.level.updatedAt <= clock + 3600)
 check("identity not matching id dropped", fake and fake.identity == nil)
-check("non-numeric profession key dropped", fake and fake.professions.evil == nil)
-check("non-number rank sanitized to nil", fake and fake.professions["171"].rank == nil)
+check("over-long profession key dropped", fake and fake.professions[string.rep("e", 80)] == nil)
+check("non-number rank sanitized to nil", fake and fake.professions["Alchemy"].rank == nil)
+check("recipe list sanitized (non-strings dropped, long names capped)", fake and #fake.recipes.Alchemy == 2 and #fake.recipes.Alchemy[2] == 96)
 check("bad id rejected", db(C)["bad id with no hyphens"] == nil)
 
 -- 6. Malformed input never errors
 local ok = pcall(function()
-	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DATA:1000:1:1:{s999:abc", "WHISPER", 22)
+	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "2:DATA:1000:1:1:{s999:abc", "WHISPER", 22)
 	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "garbage", "WHISPER", 22)
-	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DATA:1001:5:3:x", "WHISPER", 22)
-	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DIGEST:1002:1:1:" .. string.rep("{", 50), "WHISPER", 22)
+	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "2:DATA:1001:5:3:x", "WHISPER", 22)
+	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "2:DIGEST:1002:1:1:" .. string.rep("{", 50), "WHISPER", 22)
 end)
 check("malformed messages handled without error", ok)
 
@@ -265,6 +294,119 @@ check("300-record multi-chunk sync delivered all records", count == 300)
 local before = A.sent + B.sent + C.sent + E.sent
 advance(600)
 check("no traffic churn once synced", (A.sent + B.sent + C.sent + E.sent) == before)
+
+
+-- 10. Recipes: capture, grow-only merge, sync
+local bobID = "Bobb-AreaFiftyTwo-US"
+local function openTrade(client, name, recipes)
+	client.env.GetTradeSkillLine = function() return name, 100, 300 end
+	client.env.GetNumTradeSkills = function() return #recipes end
+	client.env.GetTradeSkillInfo = function(i) return recipes[i][1], recipes[i][2] end
+	fire(client, "TRADE_SKILL_SHOW")
+	fire(client, "TRADE_SKILL_UPDATE")
+	advance(1)
+end
+openTrade(B, "Alchemy", { { "Flasks", "header" }, { "Flask of Titans", "optimal" }, { "Elixir of Giants", "trivial" } })
+check("recipes captured, headers skipped", db(B)[bobID].recipes and #db(B)[bobID].recipes.Alchemy == 2)
+local before = db(B)[bobID].recipes.updatedAt
+advance(5)
+openTrade(B, "Alchemy", { { "Flask of Titans", "optimal" } })
+check("filtered window doesn't shrink recipe list", #db(B)[bobID].recipes.Alchemy == 2)
+check("reopening with nothing new doesn't bump updatedAt", db(B)[bobID].recipes.updatedAt == before)
+openTrade(B, "Alchemy", { { "Flask of Titans", "optimal" }, { "Major Healing Potion", "easy" } })
+check("newly learned recipe added", #db(B)[bobID].recipes.Alchemy == 3)
+advance(60)
+check("recipes synced to C", db(C)[bobID].recipes and #db(C)[bobID].recipes.Alchemy == 3)
+
+-- Vanilla Craft window (Enchanting)
+B.env.GetCraftDisplaySkillLine = function() return "Cooking", 50, 100 end
+B.env.GetNumCrafts = function() return 2 end
+B.env.GetCraftInfo = function(i)
+	if i == 1 then return "Meats", "", "header" end
+	return "Spiced Wolf Meat", "", "easy"
+end
+fire(B, "CRAFT_SHOW")
+advance(1)
+check("craft window recipes captured", db(B)[bobID].recipes.Cooking and #db(B)[bobID].recipes.Cooking == 1)
+
+-- Unlearning a profession prunes its recipes
+B.env.GetProfessions = function() return nil, nil, nil, nil, 2 end
+fire(B, "SKILL_LINES_CHANGED")
+check("unlearned profession's recipes pruned", db(B)[bobID].recipes.Alchemy == nil and db(B)[bobID].recipes.Cooking ~= nil)
+check("unlearned profession removed", db(B)[bobID].professions.Alchemy == nil)
+
+-- 11. Vanilla-based client: skill-line profession capture
+local F = newClient({ name = "F", tag = "Finn#6666", gameID = 66, char = "Finn", realm = "Stormrage", level = 40, alchemy = 1, zone = "Ironforge" })
+F.env.GetProfessions = nil
+F.skillLines = {
+	{ "Class Skills", true, true }, { "Fire", false, false, 1, 1 },
+	{ "Professions", true, true }, { "Tailoring", false, false, 120, 150 }, { "Enchanting", false, false, 90, 150 },
+	{ "Secondary Skills", true, true }, { "First Aid", false, false, 75, 75 }, { "Fishing", false, false, 1, 75 },
+	{ "Weapon Skills", true, true }, { "Staves", false, false, 200, 200 },
+}
+F.env.GetNumSkillLines = function() return #F.skillLines end
+F.env.GetSkillLineInfo = function(i)
+	local l = F.skillLines[i]
+	return l[1], l[2], l[3], l[4], 0, 0, l[5]
+end
+login(F)
+local finn = db(F)["Finn-Stormrage-US"].professions
+check("classic: primary professions from skill lines", finn.Tailoring and finn.Tailoring.type == "primary" and finn.Tailoring.rank == 120 and finn.Enchanting ~= nil)
+check("classic: secondary professions from skill lines", finn["First Aid"] and finn["First Aid"].type == "secondary" and finn.Fishing ~= nil)
+check("classic: non-profession skills ignored", finn.Staves == nil and finn.Fire == nil)
+F.skillLines = {
+	{ "Class Skills", true, true }, { "Fire", false, false, 1, 1 },
+	{ "Professions", true, false },
+	{ "Secondary Skills", true, true }, { "First Aid", false, false, 75, 75 },
+}
+fire(F, "SKILL_LINES_CHANGED")
+check("classic: collapsed header doesn't wipe professions", db(F)["Finn-Stormrage-US"].professions.Tailoring ~= nil)
+
+-- 12. Large recipe payload is split into several DATA messages
+for i = 1, 300 do
+	local list = {}
+	for r = 1, 100 do list[r] = "Recipe number " .. r end
+	db(E)["Alt" .. i .. "-Stormrage-US"].recipes = { Alchemy = list, updatedAt = clock, source = "self" }
+end
+local G = newClient({ name = "G", tag = "Gus#7777", gameID = 77, char = "Guss", realm = "Stormrage", level = 10, alchemy = 1, zone = "Dornogal" })
+befriend(E, G)
+login(G)
+fire(E, "BN_FRIEND_INFO_CHANGED")
+advance(900)
+local dataMessages, withRecipes = 0, 0
+for _, text in ipairs(E.texts) do
+	if text:match("^2:DATA:%d+:1:") then dataMessages = dataMessages + 1 end
+end
+for id, rec in pairs(db(G)) do
+	if id:match("^Alt%d+") and rec.recipes and #rec.recipes.Alchemy == 100 then withRecipes = withRecipes + 1 end
+end
+check("large sync split into multiple DATA messages (" .. dataMessages .. ")", dataMessages > 5)
+check("all 300 alts' recipes delivered", withRecipes == 300)
+
+-- 13. UI smoke test: open window, click a character, recipe panel renders
+local CA = C.env.FriendInfoTracker
+local ok, err = pcall(function()
+	CA.ToggleUI()
+	local mainFrame = C.env.FriendInfoTrackerFrame
+	local clicked
+	for _, row in ipairs(mainFrame.rows) do
+		if row.entry and row.entry.id == bobID then
+			row.scripts.OnClick(row)
+			clicked = row
+		end
+	end
+	assert(clicked, "Bob's row not found")
+	local row = clicked
+	row.scripts.OnEnter(row)
+	local panelText = C.env.FriendInfoTrackerRecipes.text.text
+	assert(panelText:find("Cooking") and panelText:find("Spiced Wolf Meat"), "recipe panel missing recipes: " .. tostring(panelText))
+	local secondary = clicked.cells.secondary.text
+	assert(secondary:find("Cooking"), "secondary column missing Cooking: " .. tostring(secondary))
+	row.scripts.OnClick(row) -- toggles panel closed
+	assert(not C.env.FriendInfoTrackerRecipes:IsShown(), "panel didn't close")
+	CA.ToggleUI()
+end)
+check("UI renders rows, columns, and recipe panel" .. (ok and "" or (": " .. tostring(err))), ok)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -120,8 +120,8 @@ connected to.
 
 For online Battle.net friends who don't run the addon, the friend list gives
 the current character's **name, realm, level, class, race and zone**. That data
-is cached and relayed the same way. **Professions are never available** for
-these friends: no in-game API exposes them.
+is cached and relayed the same way. **Professions and recipes are never
+available** for these friends: no in-game API exposes them.
 
 A friend only falls back to friend-list capture after they've ignored a PING
 for 30 seconds. Capturing them earlier would stamp friend-list data as newer
@@ -132,13 +132,15 @@ than their real addon data, which is about to arrive.
 All messages go over `BNSendGameData` with prefix `FIT`, as
 `<protocol>:<TYPE>:<msgID>:<seq>:<total>:<chunk>`. Payloads are serialized
 tables (see `Serialize.lua`), split into chunks of up to 3800 bytes on UTF-8
-boundaries and sent through a paced queue.
+boundaries and sent through a paced queue. Large record sets (for example,
+many characters with long recipe lists) are split into several `DATA`
+messages of about 32KB each. The current protocol version is `2`.
 
 | Message | Meaning |
 |---|---|
 | `PING` | Sent once per session to every online WoW friend |
 | `PONG` | Reply to a `PING`: "I run the addon" |
-| `DIGEST` | `{ [characterID] = { identityAt, levelAt, professionsAt, locationAt } }` |
+| `DIGEST` | `{ [characterID] = { identityAt, levelAt, professionsAt, locationAt, recipesAt } }` |
 | `DATA` | `{ [characterID] = record }`, only what's newer than the peer's digest |
 
 After a `PING`/`PONG` both sides send their digest, and each side sends what
@@ -147,8 +149,8 @@ are pushed as `DATA` to every online peer after a 30-second debounce. That
 push is what relays data onward. Once both sides are in sync no more messages
 are sent, because a merge only accepts strictly newer data.
 
-**Merge rule:** per section (identity / level / professions / location), the
-newer `updatedAt` wins. Data from others never overwrites your own account's
+**Merge rule:** per section (identity / level / professions / location /
+recipes), the newer `updatedAt` wins. Data from others never overwrites your own account's
 characters.
 
 **Untrusted input:** everything received is parsed by a non-executing
@@ -168,7 +170,7 @@ visibility).
 
 ```lua
 FriendInfoTrackerDB = {
-  schemaVersion = 2,
+  schemaVersion = 3,
   myBattleTag = "Thrall#1234",
   characters = {
     ["Thrall-Stormrage-US"] = {
@@ -181,15 +183,19 @@ FriendInfoTrackerDB = {
       },
       level = { value = 80, updatedAt = 1759903200, source = "self" },
       professions = {
-        ["164"] = { name = "Blacksmithing", type = "primary", rank = 100, maxRank = 100 },
-        ["185"] = { name = "Cooking", type = "secondary", rank = 75, maxRank = 100 },
+        ["Blacksmithing"] = { name = "Blacksmithing", type = "primary", rank = 100, maxRank = 100, skillLine = 164 },
+        ["Cooking"] = { name = "Cooking", type = "secondary", rank = 75, maxRank = 100 },
+        updatedAt = 1759900000, source = "self",
+      },
+      recipes = {                         -- only professions whose window was opened
+        ["Blacksmithing"] = { "Copper Chain Belt", "Rough Bronze Leggings" },
         updatedAt = 1759900000, source = "self",
       },
       location = {
         zone = "Stormwind City", subzone = "Trade District", mapID = 84,
         inInstance = false, updatedAt = 1759903180, source = "self",
       },
-      meta = { addonVersion = "0.2.0", lastLogout = 1759903200 },  -- local only
+      meta = { addonVersion = "0.3.0", lastLogout = 1759903200 },  -- local only
     },
     ["Jaina-Proudmoore-US"] = {
       owner = "Jaina#5678",
@@ -204,21 +210,51 @@ FriendInfoTrackerDB = {
 
 - `source` is per section: `self` (captured on this account), `addon`
   (captured by the owner's addon), or `bnet` (seen in the friend list).
-- Characters are keyed `Name-NormalizedRealm-Region`, and professions are
-  keyed by `skillLineID`. String keys everywhere, flat nesting, no functions
-  or metatables, so the v2 agent can parse the file reliably.
-- Schema v1 → v2 migration runs on load: existing records are marked
-  `isMine`, sections get `source = "self"`, and identity gets an
-  `updatedAt`.
+- Characters are keyed `Name-NormalizedRealm-Region`. Professions and
+  recipe lists are keyed by profession name, because Vanilla-based clients
+  have no `skillLineID`; `skillLine` is stored too when the client provides
+  it. String keys everywhere, flat nesting, no functions or metatables, so
+  the v2 agent can parse the file reliably.
+- Migrations run on load. v1 → v2: existing records are marked `isMine`,
+  sections get `source = "self"`, and identity gets an `updatedAt`. v2 → v3:
+  professions are re-keyed from `skillLineID` to name.
+
+### Professions on different clients
+
+`CaptureProfessions` uses `GetProfessions()` when the client has it (modern
+clients). Otherwise it falls back to the Skills list
+(`GetNumSkillLines`/`GetSkillLineInfo`), where professions sit under the
+"Professions" and "Secondary Skills" headers (Vanilla-based clients, such as
+the 1.x Classic beta). If one of those headers is collapsed, the capture is
+skipped, because collapsed sections hide their skills and would look
+unlearned.
+
+### Recipes
+
+WoW only exposes a profession's recipe list while that profession's window is
+open. So recipes are recorded the first time each profession window is opened
+on a character, and updated whenever it's opened again.
+
+- **Grow-only:** each capture is merged into the stored list, so a filtered
+  search or a collapsed category never erases recipes.
+- **Pruned on unlearn:** if the character drops a profession, its recipe list
+  is removed.
+- **Three APIs, picked by feature detection:** the Craft API (Vanilla
+  Enchanting), `C_TradeSkillUI` (modern clients), and
+  `GetTradeSkillLine`/`GetTradeSkillInfo` (Vanilla trade skills).
+- Reopening a window with nothing new doesn't bump `updatedAt`, so it
+  doesn't trigger a sync.
 
 ### Capture triggers
 
 | Event | Updates |
 |---|---|
 | `PLAYER_LOGIN` | full snapshot: identity, level, professions, location |
-| `PLAYER_LEVEL_UP` | level |
 | `SKILL_LINES_CHANGED` | professions |
-| `TRADE_SKILL_SHOW` (profession window opened) | professions (catches max-rank increases) |
+| `PLAYER_LEVEL_UP` | level (uses the event's new-level argument) |
+| `TRADE_SKILL_SHOW` (profession window opened) | professions (catches max-rank increases) + recipes |
+| `TRADE_SKILL_UPDATE` / `TRADE_SKILL_LIST_UPDATE` / `NEW_RECIPE_LEARNED` | recipes (debounced 0.5s) |
+| `CRAFT_SHOW` / `CRAFT_UPDATE` (Vanilla Enchanting window) | recipes (debounced 0.5s) |
 | `ZONE_CHANGED_NEW_AREA` / `ZONE_CHANGED` | location |
 | `PLAYER_LOGOUT` | final location snapshot (stored locally; too late to send) |
 
@@ -227,13 +263,21 @@ FriendInfoTrackerDB = {
 - **Entry points:** `/fit` (or `/friendinfotracker`) and a draggable minimap
   button. Data capture is silent, and the window only opens on demand.
 - **Commands:** see [Commands](#commands).
-- **Layout:** grouped by owner, with "Your characters" first and then each
-  friend by BattleTag. Each row shows name (class-colored), level, zone,
-  professions and how old the data is. The current character is highlighted,
-  and rows older than 7 days are dimmed.
-- **Row tooltip:** realm, owner, full profession ranks, and each section's
-  age and source ("this account", "their addon", "relayed via Bob",
-  "friend list").
+- **Layout:** a 780px-wide window with column headers: Character, Level,
+  Zone, Primary, Secondary, Updated. Rows are grouped by owner ("Your
+  characters" first, then each friend by BattleTag), with gold section
+  headers. The Primary and Secondary columns list one profession and rank
+  per line, and each row grows to fit. The current character is tinted gold,
+  the selected character blue, and rows older than 7 days are dimmed.
+  Escape closes the window.
+- **Recipe panel:** click a character to open a panel that folds out to the
+  right of the main window. It lists recipes grouped by profession, with a
+  count per profession and one recipe per line, and scrolls. Click the same
+  row again, or the panel's close button, to fold it away. Rows with
+  recorded recipes show a small arrow. If no recipes are recorded yet, the
+  panel says how to record them, or that the friend doesn't run the addon.
+- **Row tooltip:** realm, owner, subzone, and each section's age and source
+  ("this account", "their addon", "relayed via Bob", "friend list").
 - **Hygiene:** Blizzard's own templates (no UI library), frame created
   lazily, standalone frame only, no hooks into Blizzard UI, so no taint.
 
@@ -251,7 +295,10 @@ FriendInfoTrackerDB = {
 Run the simulation with `lua tests/sim.lua FriendInfoTracker` from the repo root.
 It covers direct sync, relay without overlap, passive capture, live pushes,
 own-record protection, hostile and malformed input, large multi-chunk syncs,
-and no traffic once in sync. It runs on desktop Lua, not WoW's client, so it
+no traffic once in sync, recipe capture (grow-only, pruning, Craft window,
+sync), the Vanilla skill-line profession path, splitting large payloads into
+batches, and a UI smoke test (rows, columns, recipe panel) against stubbed
+frames. It runs on desktop Lua, not WoW's client, so it
 checks the logic but not the WoW API behaviour.
 
 ## Verify in a live client
@@ -271,16 +318,25 @@ These API assumptions can't be tested outside the game:
 - Passive capture builds realm keys by removing spaces and hyphens from
   `realmName`. That has to match `GetNormalizedRealmName()`, or a friend who
   later installs the addon will show up twice.
-- `PLAYER_LEVEL_UP` timing: `UnitLevel("player")` may still report the old
-  level when the event fires (the new level is the event's first argument).
+- **Vanilla-based (1.x) client:** whether `GetProfessions` exists, the exact
+  Skills-list header names ("Professions", "Secondary Skills"), and whether
+  Mining's smelting window reports itself as "Mining" (recipes are matched
+  to professions by name).
+- **Recipe APIs:** `GetTradeSkillLine`/`GetTradeSkillInfo` and the Craft API
+  (`GetCraftDisplaySkillLine`, `GetNumCrafts`, `GetCraftInfo`) on the 1.x
+  client; `C_TradeSkillUI.GetBaseProfessionInfo`/`GetAllRecipeIDs` on modern
+  clients.
+- **UI appearance:** layout, font sizes, and multi-line profession cells.
+  The simulation only checks that the code runs, not how it looks.
 - TOC `## Interface:` needs a bump on major patches.
 
 ## Roadmap
 
 - **v1 (built):** addon-only. Own capture, Battle.net peer sync with relay,
-  passive friend-list capture, grouped in-game window, minimap button.
-- **v1.x ideas:** export window (copyable CSV for spreadsheets), a detail
-  pane, sortable columns, `/fit forget <BattleTag>` to clear a friend's
+  passive friend-list capture, grouped in-game window with profession
+  columns, recipe fold-out panel, minimap button.
+- **v1.x ideas:** export window (copyable CSV for spreadsheets), recipe
+  search across all characters ("who can make X?"), sortable columns, `/fit forget <BattleTag>` to clear a friend's
   cached data.
 - **v2:** uploader agent + central server + web dashboard (below).
 
