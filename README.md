@@ -200,7 +200,7 @@ FriendInfoTrackerDB = {
         zone = "Stormwind City", subzone = "Trade District", mapID = 84,
         inInstance = false, updatedAt = 1759903180, source = "self",
       },
-      meta = { addonVersion = "0.4.0", lastLogout = 1759903200 },  -- local only
+      meta = { addonVersion = "0.5.0", lastLogout = 1759903200 },  -- local only
     },
     ["Jaina-Proudmoore-US"] = {
       owner = "Jaina#5678",
@@ -276,17 +276,26 @@ on a character, and updated whenever it's opened again.
   the selected character blue, and rows older than 7 days are dimmed.
   Escape closes the window.
 - **Recipe panel:** click a character to open a panel that folds out to the
-  right of the main window. It lists recipes grouped by profession, with a
-  count per profession and one recipe per line, and scrolls. Click the same
-  row again, or the panel's close button, to fold it away. Rows with
-  recorded recipes show a small arrow. If no recipes are recorded yet, the
-  panel says how to record them, or that the friend doesn't run the addon.
-- **Hiding friends:** each friend's group header has a **Hide** button.
-  Hidden friends and their characters move to a **Hidden** section at the
-  bottom of the list. It's collapsed by default each session; click its
-  header to expand it, where hidden friends appear dimmed with a **Show**
-  button. Hiding is account-wide, by BattleTag, and only affects the display:
-  hidden friends' data is still captured, synced and relayed.
+  right of the main window. Click the same row again, or the panel's close
+  button, to fold it away. Rows with recorded recipes show a small arrow.
+  - **Collapsible professions:** each profession is a header with a +/- icon
+    and a recipe count, for example "Alchemy (42)". Headers start collapsed;
+    click one to show or hide that profession's recipes, one per line.
+  - **Search:** the box at the top filters all of the character's recipes as
+    you type (case-insensitive). Professions with matches open automatically
+    and show "matches/total" counts. Searching a profession's name lists all
+    its recipes. You can still collapse headers while searching. Escape
+    clears the search. The search text is kept when you switch characters, so
+    you can check who knows a recipe.
+  - **Scrolling:** each mouse-wheel step moves 3 lines.
+  - If no recipes are recorded yet, the panel says how to record them, or that
+    the friend doesn't run the addon.
+- **Hiding friends:** done only in the Settings panel, by unchecking a
+  friend. Hidden friends and their characters move to a **Hidden** section at
+  the bottom of the list. It's collapsed by default each session; click its
+  header to expand it, where hidden friends appear dimmed. Hiding is
+  account-wide, by BattleTag, and only affects the display: hidden friends'
+  data is still captured, synced and relayed.
 - **Settings panel:** the **Settings** button (bottom-left, or
   `/fit settings`) folds out a panel on the right with all options:
   - *General:* show minimap button.
@@ -317,7 +326,9 @@ own-record protection, hostile and malformed input, large multi-chunk syncs,
 no traffic once in sync, recipe capture (grow-only, pruning, Craft window,
 sync), the Vanilla skill-line profession path, splitting large payloads into
 batches, and a UI smoke test (rows, columns, recipe panel) against stubbed
-frames, plus hiding friends, the Hidden section and the Settings panel. It runs on desktop Lua, not WoW's client, so it
+frames, plus collapsible professions, recipe search, scroll step, hiding
+friends via Settings, the Hidden section and the Settings panel. It runs on
+desktop Lua, not WoW's client, so it
 checks the logic but not the WoW API behaviour.
 
 ## Verify in a live client

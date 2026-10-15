@@ -139,6 +139,33 @@ end
 -- Recipe fold-out panel
 ---------------------------------------------------------------------------
 
+local RECIPE_LINE_HEIGHT = 14
+local RECIPE_HEADER_HEIGHT = 20
+local RECIPE_SCROLL_LINES = 3 -- lines moved per mouse-wheel step
+local RECIPE_LINE_WIDTH = RECIPE_PANEL_WIDTH - 48
+
+-- Professions start collapsed. While a search is active, matching
+-- professions start expanded instead, and clicks collapse them for that
+-- search only.
+local expandedProfessions = {} -- [professionName] = true
+local searchCollapsed = {} -- [professionName] = true, reset when the search changes
+local searchText = ""
+
+local RefreshRecipePanel
+
+-- Scrolls a fixed number of lines per wheel step instead of the template's
+-- default (half the visible height).
+local function ScrollByLines(scrollFrame, delta)
+	local step = RECIPE_LINE_HEIGHT * RECIPE_SCROLL_LINES
+	local maxScroll = scrollFrame:GetVerticalScrollRange()
+	local target = math.max(0, math.min(maxScroll, scrollFrame:GetVerticalScroll() - delta * step))
+	if type(scrollFrame.ScrollBar) == "table" then
+		scrollFrame.ScrollBar:SetValue(target) -- keeps the scrollbar thumb in sync
+	else
+		scrollFrame:SetVerticalScroll(target)
+	end
+end
+
 local function CreateRecipePanel(parent)
 	local panel = CreateFrame("Frame", "FriendInfoTrackerRecipes", parent, "BasicFrameTemplateWithInset")
 	panel:SetSize(RECIPE_PANEL_WIDTH, FRAME_HEIGHT)
@@ -148,27 +175,56 @@ local function CreateRecipePanel(parent)
 	panel.title:SetPoint("TOP", panel, "TOP", 0, -6)
 
 	panel.subtitle = panel:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	panel.subtitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -32)
+	panel.subtitle:SetPoint("TOPLEFT", panel, "TOPLEFT", 14, -30)
 	panel.subtitle:SetPoint("RIGHT", panel, "RIGHT", -14, 0)
 	panel.subtitle:SetJustifyH("LEFT")
 
+	local search = CreateFrame("EditBox", "FriendInfoTrackerRecipeSearch", panel, "InputBoxTemplate")
+	search:SetSize(RECIPE_PANEL_WIDTH - 40, 20)
+	search:SetPoint("TOPLEFT", panel, "TOPLEFT", 22, -44)
+	search:SetAutoFocus(false)
+	search:SetMaxLetters(64)
+	search.placeholder = search:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	search.placeholder:SetPoint("LEFT", search, "LEFT", 2, 0)
+	search.placeholder:SetText("Search recipes")
+	search:SetScript("OnTextChanged", function(self)
+		local text = self:GetText() or ""
+		self.placeholder:SetShown(text == "")
+		local query = strtrim(text):lower()
+		if query ~= searchText then
+			searchText = query
+			searchCollapsed = {}
+			RefreshRecipePanel(true)
+		end
+	end)
+	search:SetScript("OnEscapePressed", function(self)
+		self:SetText("")
+		self:ClearFocus()
+	end)
+	search:SetScript("OnEnterPressed", function(self)
+		self:ClearFocus()
+	end)
+	panel.search = search
+
 	local scrollFrame = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
-	scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -52)
+	scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -72)
 	scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -32, 10)
+	scrollFrame:EnableMouseWheel(true)
+	scrollFrame:SetScript("OnMouseWheel", ScrollByLines)
 
 	local content = CreateFrame("Frame", nil, scrollFrame)
-	content:SetSize(RECIPE_PANEL_WIDTH - 48, 1)
+	content:SetSize(RECIPE_LINE_WIDTH, 1)
 	scrollFrame:SetScrollChild(content)
 
-	panel.text = content:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	panel.text:SetPoint("TOPLEFT", content, "TOPLEFT", 2, 0)
-	panel.text:SetWidth(RECIPE_PANEL_WIDTH - 52)
-	panel.text:SetJustifyH("LEFT")
-	panel.text:SetJustifyV("TOP")
-	panel.text:SetSpacing(3)
+	panel.message = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	panel.message:SetPoint("TOPLEFT", content, "TOPLEFT", 2, -2)
+	panel.message:SetWidth(RECIPE_LINE_WIDTH - 4)
+	panel.message:SetJustifyH("LEFT")
+	panel.message:SetJustifyV("TOP")
 
 	panel.content = content
 	panel.scrollFrame = scrollFrame
+	panel.lines = {}
 	panel:SetScript("OnHide", function()
 		selectedID = nil
 		addon.RefreshFrame()
@@ -177,7 +233,55 @@ local function CreateRecipePanel(parent)
 	return panel
 end
 
-local function RefreshRecipePanel()
+-- Pooled lines: profession headers (clickable, +/- icon) and recipe names.
+local function GetRecipeLine(index)
+	local line = recipePanel.lines[index]
+	if line then
+		return line
+	end
+	line = CreateFrame("Button", nil, recipePanel.content)
+	line:SetWidth(RECIPE_LINE_WIDTH)
+
+	line.hover = line:CreateTexture(nil, "HIGHLIGHT")
+	line.hover:SetAllPoints()
+	line.hover:SetColorTexture(1, 1, 1, 0.06)
+
+	line.icon = line:CreateTexture(nil, "OVERLAY")
+	line.icon:SetSize(14, 14)
+	line.icon:SetPoint("LEFT", line, "LEFT", 0, 0)
+
+	line.text = line:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	line.text:SetPoint("RIGHT", line, "RIGHT", -2, 0)
+	line.text:SetJustifyH("LEFT")
+	line.text:SetWordWrap(false)
+
+	line:SetScript("OnClick", function(self)
+		local profession = self.profession
+		if not profession then
+			return
+		end
+		if searchText ~= "" then
+			searchCollapsed[profession] = not searchCollapsed[profession] or nil
+		else
+			expandedProfessions[profession] = not expandedProfessions[profession] or nil
+		end
+		RefreshRecipePanel()
+	end)
+
+	recipePanel.lines[index] = line
+	return line
+end
+
+local function IsProfessionExpanded(profession)
+	if searchText ~= "" then
+		return not searchCollapsed[profession]
+	end
+	return expandedProfessions[profession] == true
+end
+
+-- resetScroll: jump back to the top (new character or new search). Data
+-- refreshes keep the current scroll position.
+RefreshRecipePanel = function(resetScroll)
 	if not recipePanel or not recipePanel:IsShown() or not selectedID then
 		return
 	end
@@ -186,33 +290,84 @@ local function RefreshRecipePanel()
 		recipePanel:Hide()
 		return
 	end
+	if recipePanel.shownID ~= selectedID then
+		recipePanel.shownID = selectedID
+		resetScroll = true
+	end
 	local identity = record.identity or {}
 	recipePanel.title:SetText(ClassColorString(Safe(identity.name or selectedID), identity.class) .. " - Recipes")
 	recipePanel.subtitle:SetText(record.recipes and ("Updated " .. SourceText(record, "recipes")) or "")
 
-	local lines = {}
 	local lists = RecipeLists(record)
-	if #lists > 0 then
-		for index, entry in ipairs(lists) do
-			if index > 1 then
-				lines[#lines + 1] = " "
-			end
-			lines[#lines + 1] = string.format("|cffffd100%s|r %s", Safe(entry.profession), Gray("(" .. #entry.recipes .. ")"))
-			for _, recipe in ipairs(entry.recipes) do
-				lines[#lines + 1] = "   " .. Safe(recipe)
-			end
-		end
-	elseif record.level and record.level.source == "bnet" then
-		lines[1] = Gray("This friend isn't running FriendInfoTracker, so their recipes aren't available.")
-	else
-		lines[1] = Gray("No recipes recorded yet.")
-		lines[2] = " "
-		lines[3] = Gray("Recipes are recorded when each profession window is opened on this character.")
+	local lineCount, offset = 0, 0
+	local function AddLine(height, profession)
+		lineCount = lineCount + 1
+		local line = GetRecipeLine(lineCount)
+		line:ClearAllPoints()
+		line:SetPoint("TOPLEFT", recipePanel.content, "TOPLEFT", 0, -offset)
+		line:SetHeight(height)
+		line.profession = profession
+		line:EnableMouse(profession ~= nil)
+		line:Show()
+		offset = offset + height
+		return line
 	end
 
-	recipePanel.text:SetText(table.concat(lines, "\n"))
-	recipePanel.content:SetHeight(math.max(1, recipePanel.text:GetStringHeight() + 8))
-	recipePanel.scrollFrame:SetVerticalScroll(0)
+	for _, entry in ipairs(lists) do
+		local profession = entry.profession
+		local professionMatches = searchText ~= "" and profession:lower():find(searchText, 1, true)
+		local matches = {}
+		for _, recipe in ipairs(entry.recipes) do
+			if searchText == "" or professionMatches or recipe:lower():find(searchText, 1, true) then
+				matches[#matches + 1] = recipe
+			end
+		end
+
+		if #matches > 0 then
+			local expanded = IsProfessionExpanded(profession)
+			local count = searchText ~= "" and (#matches .. "/" .. #entry.recipes) or tostring(#entry.recipes)
+			local header = AddLine(RECIPE_HEADER_HEIGHT, profession)
+			header.icon:SetTexture(expanded and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
+			header.icon:Show()
+			header.text:SetFontObject("GameFontNormal")
+			header.text:SetPoint("LEFT", header, "LEFT", 18, 0)
+			header.text:SetText(Safe(profession) .. " " .. Gray("(" .. count .. ")"))
+			if expanded then
+				for _, recipe in ipairs(matches) do
+					local line = AddLine(RECIPE_LINE_HEIGHT, nil)
+					line.icon:Hide()
+					line.text:SetFontObject("GameFontHighlightSmall")
+					line.text:SetPoint("LEFT", line, "LEFT", 22, 0)
+					line.text:SetText(Safe(recipe))
+				end
+			end
+		end
+	end
+
+	for index = lineCount + 1, #recipePanel.lines do
+		recipePanel.lines[index]:Hide()
+	end
+
+	local message
+	if #lists == 0 then
+		if record.level and record.level.source == "bnet" then
+			message = "This friend isn't running FriendInfoTracker, so their recipes aren't available."
+		else
+			message = "No recipes recorded yet.\n\nRecipes are recorded when each profession window is opened on this character."
+		end
+	elseif lineCount == 0 then
+		message = string.format("No recipes match \"%s\".", Safe(searchText))
+	end
+	recipePanel.message:SetShown(message ~= nil)
+	recipePanel.message:SetText(message or "")
+	if message then
+		offset = math.max(offset, recipePanel.message:GetStringHeight() + 8)
+	end
+
+	recipePanel.content:SetHeight(math.max(1, offset))
+	if resetScroll then
+		recipePanel.scrollFrame:SetVerticalScroll(0)
+	end
 end
 
 local function ToggleRecipePanel(id)
@@ -228,7 +383,7 @@ local function ToggleRecipePanel(id)
 	end
 	selectedID = id
 	recipePanel:Show()
-	RefreshRecipePanel()
+	RefreshRecipePanel(true)
 	addon.RefreshFrame()
 end
 
@@ -241,7 +396,7 @@ local function ShowRowTooltip(row)
 	if entry and entry.kind == "hiddenHeader" then
 		GameTooltip:SetOwner(row, "ANCHOR_CURSOR")
 		GameTooltip:AddLine(hiddenExpanded and "Click to collapse" or "Click to expand", 1, 1, 1)
-		GameTooltip:AddLine("Show or hide friends from the Settings panel or a friend's Hide button.", 0.7, 0.7, 0.7, true)
+		GameTooltip:AddLine("Choose which friends are hidden in Settings.", 0.7, 0.7, 0.7, true)
 		GameTooltip:Show()
 		return
 	end
@@ -398,16 +553,6 @@ local function GetOrCreateRow(parent, index)
 	row.expand:SetSize(14, 14)
 	row.expand:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 5)
 
-	-- Per-friend Hide/Show button on friend group headers
-	row.toggle = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-	row.toggle:SetSize(60, 18)
-	row.toggle:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -4, 4)
-	row.toggle:SetScript("OnClick", function()
-		local entry = row.entry
-		if entry and entry.kind == "group" and not entry.isMine then
-			addon.SetFriendHidden(entry.key, not entry.hidden)
-		end
-	end)
 	row.headerLine = row:CreateTexture(nil, "ARTWORK")
 	row.headerLine:SetColorTexture(1, 0.82, 0, 0.35)
 	row.headerLine:SetHeight(1)
@@ -539,15 +684,12 @@ local function ShowHeaderRow(row, entry)
 		row.expand:Show()
 		row.header:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 22, 4)
 		row.header:SetText(string.format("Hidden %s", Gray("(" .. entry.count .. (entry.count == 1 and " friend)" or " friends)"))))
-		row.toggle:Hide()
 		row:SetAlpha(0.8)
 		row:EnableMouse(true)
 	else
 		row.expand:Hide()
 		row.header:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 4)
 		row.header:SetText(entry.title)
-		row.toggle:SetShown(not entry.isMine)
-		row.toggle:SetText(entry.hidden and "Show" or "Hide")
 		row:SetAlpha(entry.dimmed and 0.6 or 1)
 		row:EnableMouse(false)
 	end
@@ -578,7 +720,6 @@ local function RefreshFrame()
 			ShowHeaderRow(row, entry)
 		else
 			row.expand:Hide()
-			row.toggle:Hide()
 			ShowCharacterRow(row, entry, currentID)
 			row:EnableMouse(true)
 		end

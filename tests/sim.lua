@@ -44,6 +44,9 @@ local function stubFrame(env)
 		GetHeight = function(self) return self.height end,
 		SetText = function(self, t) self.text = t end,
 		GetStringHeight = function() return 12 end,
+		GetText = function(self) return self.text end,
+		SetVerticalScroll = function(self, v) self.scroll = v end,
+		GetVerticalScroll = function(self) return self.scroll or 0 end,
 		SetChecked = function(self, v) self.checked = v and true or false end,
 		GetChecked = function(self) return self.checked end,
 	}
@@ -388,6 +391,12 @@ check("all 300 alts' recipes delivered", withRecipes == 300)
 -- 13. UI smoke test: open window, click a character, recipe panel renders
 local CA = C.env.FriendInfoTracker
 local ok, err = pcall(function()
+	-- Give C's cached copy of Bob a few more recipes to work with
+	db(C)[bobID].recipes = {
+		Cooking = { "Roast Raptor", "Smoked Bear Meat", "Spiced Wolf Meat" },
+		Tailoring = { "Bolt of Linen Cloth", "Linen Bag" },
+		updatedAt = clock, source = "addon",
+	}
 	CA.ToggleUI()
 	local mainFrame = C.env.FriendInfoTrackerFrame
 	local clicked
@@ -400,12 +409,72 @@ local ok, err = pcall(function()
 	assert(clicked, "Bob's row not found")
 	local row = clicked
 	row.scripts.OnEnter(row)
-	local panelText = C.env.FriendInfoTrackerRecipes.text.text
-	assert(panelText:find("Cooking") and panelText:find("Spiced Wolf Meat"), "recipe panel missing recipes: " .. tostring(panelText))
 	local secondary = clicked.cells.secondary.text
 	assert(secondary:find("Cooking"), "secondary column missing Cooking: " .. tostring(secondary))
+
+	local panel = C.env.FriendInfoTrackerRecipes
+	local function shownLines()
+		local out = {}
+		for _, line in ipairs(panel.lines) do
+			if line.shown then out[#out + 1] = line end
+		end
+		return out
+	end
+	local function headerFor(profession)
+		for _, line in ipairs(shownLines()) do
+			if line.profession == profession then return line end
+		end
+	end
+
+	-- Collapsed by default: only the two profession headers
+	local lines = shownLines()
+	assert(#lines == 2 and lines[1].profession == "Cooking" and lines[2].profession == "Tailoring", "professions start collapsed (" .. #lines .. " lines)")
+	assert(lines[1].text.text:find("%(3%)"), "header shows recipe count")
+
+	-- Expand Cooking
+	headerFor("Cooking").scripts.OnClick(headerFor("Cooking"))
+	lines = shownLines()
+	assert(#lines == 5 and lines[2].text.text == "Roast Raptor", "Cooking expanded shows its 3 recipes")
+	-- Collapse again
+	headerFor("Cooking").scripts.OnClick(headerFor("Cooking"))
+	assert(#shownLines() == 2, "Cooking collapsed again")
+
+	-- Search: matching professions auto-expand, counts show matches/total
+	local search = C.env.FriendInfoTrackerRecipeSearch
+	search:SetText("meat")
+	search.scripts.OnTextChanged(search)
+	lines = shownLines()
+	assert(#lines == 3 and lines[1].profession == "Cooking" and lines[1].text.text:find("2/3"), "search filters to matching recipes")
+	assert(lines[2].text.text == "Smoked Bear Meat" and lines[3].text.text == "Spiced Wolf Meat", "search results listed")
+	-- Collapse during search
+	headerFor("Cooking").scripts.OnClick(headerFor("Cooking"))
+	assert(#shownLines() == 1, "header click collapses during search")
+	-- Search by profession name shows all its recipes
+	search:SetText("tailor")
+	search.scripts.OnTextChanged(search)
+	lines = shownLines()
+	assert(#lines == 3 and lines[1].profession == "Tailoring", "profession-name search shows all its recipes")
+	-- No matches message
+	search:SetText("zzz")
+	search.scripts.OnTextChanged(search)
+	assert(#shownLines() == 0 and panel.message.shown and panel.message.text:find("No recipes match"), "no-match message")
+	-- Escape clears the search
+	search.scripts.OnEscapePressed(search)
+	search.scripts.OnTextChanged(search)
+	assert(#shownLines() == 2, "clearing search restores collapsed list")
+
+	-- Mouse wheel scrolls 3 lines (3 x 14px) per step
+	local scrollFrame = panel.scrollFrame
+	scrollFrame.GetVerticalScrollRange = function() return 1000 end
+	scrollFrame:SetVerticalScroll(0)
+	scrollFrame.scripts.OnMouseWheel(scrollFrame, -1)
+	assert(scrollFrame.scroll == 42, "wheel step scrolls 42px, got " .. tostring(scrollFrame.scroll))
+	scrollFrame.scripts.OnMouseWheel(scrollFrame, 1)
+	scrollFrame.scripts.OnMouseWheel(scrollFrame, 1)
+	assert(scrollFrame.scroll == 0, "wheel clamps at top")
+
 	row.scripts.OnClick(row) -- toggles panel closed
-	assert(not C.env.FriendInfoTrackerRecipes:IsShown(), "panel didn't close")
+	assert(not panel:IsShown(), "panel didn't close")
 	CA.ToggleUI()
 end)
 check("UI renders rows, columns, and recipe panel" .. (ok and "" or (": " .. tostring(err))), ok)
@@ -430,18 +499,28 @@ local ok2, err2 = pcall(function()
 
 	assert(not find(function(e) return e.kind == "hiddenHeader" end), "no Hidden section before hiding anyone")
 
-	-- Hide Bob with the group header's Hide button
+	-- No per-friend Hide buttons in the main window
 	local bobHeader = find(function(e) return e.kind == "group" and e.key == "Bob#2222" end)
-	assert(bobHeader and bobHeader.toggle.text == "Hide", "Bob's header has a Hide button")
-	bobHeader.toggle.scripts.OnClick(bobHeader.toggle)
+	assert(bobHeader and rawget(bobHeader, "toggle") == nil, "no Hide button on friend headers")
+
+	-- Hide Bob via Settings
+	UI.ToggleSettings()
+	local settings = C.env.FriendInfoTrackerSettingsPanel
+	local function friendCheck(key)
+		for _, check in ipairs(settings.friendChecks) do
+			if check.shown and check.friendKey == key then return check end
+		end
+	end
+	local hideCheck = friendCheck("Bob#2222")
+	hideCheck:SetChecked(false)
+	hideCheck.scripts.OnClick(hideCheck)
+	UI.ToggleSettings()
 	assert(C.env.FriendInfoTrackerSettings.hiddenFriends["Bob#2222"], "Bob stored as hidden")
 
 	local entries = visibleEntries()
 	local last = entries[#entries]
 	assert(last.kind == "hiddenHeader" and last.count == 1, "Hidden section is last, with 1 friend")
 	assert(not find(function(e) return e.kind == "character" and e.id == bobID end), "Bob's characters collapsed away")
-	local ownHeader = find(function(e) return e.kind == "group" and e.isMine end)
-	assert(ownHeader and not ownHeader.toggle.shown, "own group has no Hide button")
 
 	-- Expand the Hidden section
 	local hiddenRow = find(function(e) return e.kind == "hiddenHeader" end)
@@ -455,10 +534,13 @@ local ok2, err2 = pcall(function()
 		if e.kind == "character" and e.id == bobID then assert(sawHidden, "Bob listed below the Hidden header") end
 	end
 
-	-- Show Bob again via the header button inside the Hidden section
-	bobHeader = find(function(e) return e.kind == "group" and e.key == "Bob#2222" end)
-	assert(bobHeader.toggle.text == "Show", "hidden friend's button says Show")
-	bobHeader.toggle.scripts.OnClick(bobHeader.toggle)
+	-- Unhide via Settings
+	UI.ToggleSettings()
+	hideCheck = friendCheck("Bob#2222")
+	assert(hideCheck.checked == false, "hidden friend unchecked in Settings")
+	hideCheck:SetChecked(true)
+	hideCheck.scripts.OnClick(hideCheck)
+	UI.ToggleSettings()
 	assert(not C.env.FriendInfoTrackerSettings.hiddenFriends["Bob#2222"], "Bob unhidden")
 	assert(not find(function(e) return e.kind == "hiddenHeader" end), "Hidden section gone when empty")
 
