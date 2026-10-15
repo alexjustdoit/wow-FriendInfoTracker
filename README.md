@@ -7,6 +7,63 @@ can be viewed in-game.
 **Status:** v1 (addon-only) built, but not yet tested in a live client.
 v2 (uploader agent + web dashboard) is planned only.
 
+## Manual install & testing
+
+### Install
+
+1. Find your AddOns folder. Use the folder for the game flavor you play
+   (`_retail_`, `_classic_`, etc.):
+   - **Mac:** `/Applications/World of Warcraft/_retail_/Interface/AddOns/`
+   - **Windows:** `C:\Program Files (x86)\World of Warcraft\_retail_\Interface\AddOns\`
+   - Create `Interface/AddOns` if it doesn't exist yet.
+2. Copy the `WoWForever` folder from this repo into it. The folder name must
+   stay exactly `WoWForever` (it has to match the `.toc` file), and the `.toc`
+   must sit directly inside it:
+   `.../Interface/AddOns/WoWForever/WoWForever.toc`.
+   - **Developer alternative:** symlink it so edits apply without copying:
+     `ln -s "$(pwd)/WoWForever" "/Applications/World of Warcraft/_retail_/Interface/AddOns/WoWForever"`
+3. Restart WoW completely. A `/reload` doesn't pick up a newly added addon or
+   new files listed in the `.toc`.
+4. At character select, click **AddOns** and check that **WoW Forever** is
+   enabled. If it's listed as out of date, tick **Load out of date AddOns**,
+   or bump `## Interface:` in the `.toc` to the client's current version.
+5. **Recommended while testing:** run `/console scriptErrors 1` once so Lua
+   errors pop up instead of failing silently.
+
+**Updating:** copy the new files over the old ones, then `/reload`. Restart
+the game instead if the `.toc` changed or files were added.
+
+### Test solo
+
+1. Log in. Type `/wowf`, or click the minimap button. Your current
+   character should appear under "Your characters", highlighted.
+2. Hover the row. The tooltip should list your professions with source
+   "this account".
+3. Log in on an alt and open `/wowf`. Both characters should be listed.
+4. `/reload`, then open
+   `World of Warcraft/_retail_/WTF/Account/<ACCOUNT>/SavedVariables/WoWForever.lua`.
+   It should contain a `WoWForeverDB` table with your characters.
+
+### Test with a friend
+
+1. You and a Battle.net friend both install the addon and log in to the same
+   game flavor.
+2. Wait about a minute, then both run `/wowf status`. Each of you should see
+   the other listed as running the addon. If not, run `/wowf sync`.
+3. Open `/wowf`. The friend's characters should appear under their BattleTag
+   name, with the tooltip source "their addon".
+4. **Live push:** have the friend change zones. It should show up in your
+   window within about 30 seconds.
+5. **Relay (needs 3 people):** A and C are each friends with B, but not with
+   each other. A and B overlap, then A logs off and C logs on. C should see
+   A's characters with "relayed via B".
+6. **Friend without the addon:** any online Battle.net friend in WoW who
+   isn't running the addon should appear within 1–2 minutes, with level and
+   zone but no professions, and source "friend list".
+
+Note anything that doesn't match. These tests also cover the items under
+"Verify in a live client" below.
+
 ## v1 principle: the addon is the whole product
 
 Installing the addon is the only setup. There's no companion app, server or
