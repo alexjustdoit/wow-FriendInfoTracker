@@ -1,4 +1,4 @@
-local addon = WoWForever
+local addon = FriendInfoTracker
 
 -- Minimal dependency-free serializer for plain data tables (string/number keys;
 -- string/number/boolean/table values). Strings are length-prefixed so no

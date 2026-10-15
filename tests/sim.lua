@@ -145,7 +145,7 @@ end
 local function login(client)
 	client.online = true
 	if not client.hasAddon then return end
-	fire(client, "ADDON_LOADED", "WoWForever")
+	fire(client, "ADDON_LOADED", "FriendInfoTracker")
 	fire(client, "PLAYER_LOGIN")
 	for _, other in ipairs(client.friends) do
 		if other.online and other.hasAddon then fire(other, "BN_FRIEND_INFO_CHANGED") end
@@ -157,7 +157,7 @@ local function logout(client)
 	client.online = false
 end
 
-local function db(client) return client.env.WoWForeverDB.characters end
+local function db(client) return client.env.FriendInfoTrackerDB.characters end
 
 local passed, failed = 0, 0
 local function check(label, cond)
@@ -210,7 +210,7 @@ check("level-up pushed B->C", db(C)["Bobb-AreaFiftyTwo-US"].level.value == 81)
 
 -- 5. Own records can't be overwritten by others
 local Senv = C.env
-local evil = Senv.WoWForever.Serialize({
+local evil = Senv.FriendInfoTracker.Serialize({
 	["Cara-Stormrage-US"] = { owner = "Mallory#9", level = { value = 1, updatedAt = clock + 10, source = "addon" } },
 	["Fake-Realm-US"] = {
 		identity = { name = "Other", realm = "Realm", region = "US", updatedAt = clock },
@@ -220,7 +220,7 @@ local evil = Senv.WoWForever.Serialize({
 	},
 	["bad id with no hyphens"] = { level = { value = 3, updatedAt = clock } },
 })
-fire(C, "BN_CHAT_MSG_ADDON", "WoWF", "1:DATA:999:1:1:" .. evil, "WHISPER", 22)
+fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DATA:999:1:1:" .. evil, "WHISPER", 22)
 check("own record not overwritten", db(C)["Cara-Stormrage-US"].level.value == 60)
 local fake = db(C)["Fake-Realm-US"]
 check("future timestamp clamped", fake and fake.level.updatedAt <= clock + 3600)
@@ -231,15 +231,15 @@ check("bad id rejected", db(C)["bad id with no hyphens"] == nil)
 
 -- 6. Malformed input never errors
 local ok = pcall(function()
-	fire(C, "BN_CHAT_MSG_ADDON", "WoWF", "1:DATA:1000:1:1:{s999:abc", "WHISPER", 22)
-	fire(C, "BN_CHAT_MSG_ADDON", "WoWF", "garbage", "WHISPER", 22)
-	fire(C, "BN_CHAT_MSG_ADDON", "WoWF", "1:DATA:1001:5:3:x", "WHISPER", 22)
-	fire(C, "BN_CHAT_MSG_ADDON", "WoWF", "1:DIGEST:1002:1:1:" .. string.rep("{", 50), "WHISPER", 22)
+	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DATA:1000:1:1:{s999:abc", "WHISPER", 22)
+	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "garbage", "WHISPER", 22)
+	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DATA:1001:5:3:x", "WHISPER", 22)
+	fire(C, "BN_CHAT_MSG_ADDON", "FIT", "1:DIGEST:1002:1:1:" .. string.rep("{", 50), "WHISPER", 22)
 end)
 check("malformed messages handled without error", ok)
 
 -- 7. Serializer round trip incl. UTF-8 and chunking of a large payload
-local S = A.env.WoWForever
+local S = A.env.FriendInfoTracker
 local big = {}
 for i = 1, 400 do big["Ñame" .. i .. "-Réalm-EU"] = { identity = { name = "Ñäme" .. i }, level = { value = i, updatedAt = 1.5 } } end
 local round = S.Deserialize(S.Serialize(big))

@@ -1,9 +1,9 @@
-local addon = WoWForever
+local addon = FriendInfoTracker
 
 -- Peer-to-peer sync between Battle.net friends running the addon, plus
 -- passive capture of online friends who don't run it.
 --
--- Protocol (all over BNSendGameData, prefix "WoWF"):
+-- Protocol (all over BNSendGameData, prefix "FIT"):
 --   PING    sent to every online WoW friend once per session
 --   PONG    reply to a PING; tells the sender we run the addon
 --   DIGEST  { [characterID] = { identityAt, levelAt, professionsAt, locationAt } }
@@ -14,7 +14,7 @@ local addon = WoWForever
 --
 -- Wire format per message: "<protocol>:<TYPE>:<msgID>:<seq>:<total>:<chunk>"
 
-local PREFIX = "WoWF"
+local PREFIX = "FIT"
 local PROTOCOL = "1"
 local CHUNK_SIZE = 3800 -- BNSendGameData caps a message at ~4KB
 local SEND_INTERVAL = 0.3 -- seconds between queued messages
@@ -220,7 +220,7 @@ end
 -- Per-section merge: newer updatedAt wins. Own characters are never
 -- overwritten by data from others.
 local function MergeRecord(id, incoming, senderTag)
-	local characters = WoWForeverDB.characters
+	local characters = FriendInfoTrackerDB.characters
 	local record = characters[id]
 	if record and record.isMine then
 		return false
@@ -249,7 +249,7 @@ end
 
 local function Flush()
 	flushPending = false
-	local characters = WoWForeverDB.characters
+	local characters = FriendInfoTrackerDB.characters
 	for target in pairs(peers) do
 		local payload, any = {}, false
 		for id, skipTarget in pairs(dirty) do
@@ -303,7 +303,7 @@ end
 -- richer data, so the friend list isn't used for them.
 local function AddonOwners()
 	local owners = {}
-	for _, record in pairs(WoWForeverDB.characters) do
+	for _, record in pairs(FriendInfoTrackerDB.characters) do
 		if record.owner and record.level and record.level.source == "addon" then
 			owners[record.owner] = true
 		end
@@ -324,7 +324,7 @@ local function CapturePassive(battleTag, game, addonOwners)
 	local region = addon.REGION_NAMES[game.regionID] or addon.GetRegion()
 	local id = string.format("%s-%s-%s", name, realm, region)
 
-	local characters = WoWForeverDB.characters
+	local characters = FriendInfoTrackerDB.characters
 	local record = characters[id]
 	if record and record.isMine then
 		return
@@ -366,7 +366,7 @@ end
 
 local function ScanFriends()
 	scanPending = false
-	if not WoWForeverDB or not BNConnected() then
+	if not FriendInfoTrackerDB or not BNConnected() then
 		return
 	end
 
@@ -455,7 +455,7 @@ end
 
 local function BuildDigest()
 	local digest = {}
-	for id, record in pairs(WoWForeverDB.characters) do
+	for id, record in pairs(FriendInfoTrackerDB.characters) do
 		local entry = {}
 		for index, section in ipairs(SECTIONS) do
 			entry[index] = (record[section] and record[section].updatedAt) or 0
@@ -474,7 +474,7 @@ end
 
 local function RecordsNewerThan(digest)
 	local payload, any = {}, false
-	for id, record in pairs(WoWForeverDB.characters) do
+	for id, record in pairs(FriendInfoTrackerDB.characters) do
 		local theirs = type(digest[id]) == "table" and digest[id] or {}
 		for index, section in ipairs(SECTIONS) do
 			local ours = (record[section] and record[section].updatedAt) or 0
@@ -571,7 +571,7 @@ function addon.ForceSync()
 		peer.digestSent = false
 	end
 	ScanFriends()
-	print("|cff33ff99WoW Forever:|r syncing with online friends...")
+	print("|cff33ff99FriendInfoTracker:|r syncing with online friends...")
 end
 
 function addon.PrintStatus()
@@ -584,7 +584,7 @@ function addon.PrintStatus()
 	for _ in pairs(onlineWoW) do
 		online = online + 1
 	end
-	print(string.format("|cff33ff99WoW Forever:|r %d friend(s) in WoW, %d running the addon%s",
+	print(string.format("|cff33ff99FriendInfoTracker:|r %d friend(s) in WoW, %d running the addon%s",
 		online, #names, #names > 0 and (": " .. table.concat(names, ", ")) or ""))
 end
 

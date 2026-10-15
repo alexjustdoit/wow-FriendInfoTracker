@@ -1,6 +1,6 @@
-local ADDON_NAME = "WoWForever"
-WoWForever = WoWForever or {}
-local addon = WoWForever
+local ADDON_NAME = "FriendInfoTracker"
+FriendInfoTracker = FriendInfoTracker or {}
+local addon = FriendInfoTracker
 
 local SCHEMA_VERSION = 2
 
@@ -38,14 +38,14 @@ addon.GetCharacterID = GetCharacterID
 local function GetMyBattleTag()
 	local _, battleTag = BNGetInfo()
 	if battleTag then
-		WoWForeverDB.myBattleTag = battleTag
+		FriendInfoTrackerDB.myBattleTag = battleTag
 	end
-	return WoWForeverDB.myBattleTag
+	return FriendInfoTrackerDB.myBattleTag
 end
 addon.GetMyBattleTag = GetMyBattleTag
 
 local function MigrateDB()
-	local db = WoWForeverDB
+	local db = FriendInfoTrackerDB
 	if db.schemaVersion < 2 then
 		-- v1 only ever stored this account's own characters.
 		for _, record in pairs(db.characters) do
@@ -64,17 +64,17 @@ local function MigrateDB()
 end
 
 local function InitDB()
-	WoWForeverDB = WoWForeverDB or {}
-	WoWForeverDB.schemaVersion = WoWForeverDB.schemaVersion or SCHEMA_VERSION
-	WoWForeverDB.characters = WoWForeverDB.characters or {}
+	FriendInfoTrackerDB = FriendInfoTrackerDB or {}
+	FriendInfoTrackerDB.schemaVersion = FriendInfoTrackerDB.schemaVersion or SCHEMA_VERSION
+	FriendInfoTrackerDB.characters = FriendInfoTrackerDB.characters or {}
 	MigrateDB()
-	WoWForeverCharDB = WoWForeverCharDB or {}
+	FriendInfoTrackerCharDB = FriendInfoTrackerCharDB or {}
 end
 
 local function GetCharacterRecord()
 	local id = GetCharacterID()
-	WoWForeverDB.characters[id] = WoWForeverDB.characters[id] or {}
-	local record = WoWForeverDB.characters[id]
+	FriendInfoTrackerDB.characters[id] = FriendInfoTrackerDB.characters[id] or {}
+	local record = FriendInfoTrackerDB.characters[id]
 	record.isMine = true
 	return record, id
 end

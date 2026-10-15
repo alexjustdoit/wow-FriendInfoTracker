@@ -1,4 +1,4 @@
-local addon = WoWForever
+local addon = FriendInfoTracker
 
 -- Standalone minimap button (no LibDBIcon dependency). Drag to move it around
 -- the minimap edge; position and visibility are stored per character.
@@ -8,7 +8,7 @@ local DEFAULT_ANGLE = 220
 local button
 
 local function UpdatePosition()
-	local angle = math.rad(WoWForeverCharDB.minimapAngle or DEFAULT_ANGLE)
+	local angle = math.rad(FriendInfoTrackerCharDB.minimapAngle or DEFAULT_ANGLE)
 	local radius = (Minimap:GetWidth() / 2) + 10
 	button:ClearAllPoints()
 	button:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
@@ -19,12 +19,12 @@ local function OnDragUpdate()
 	local scale = Minimap:GetEffectiveScale()
 	local cursorX, cursorY = GetCursorPosition()
 	cursorX, cursorY = cursorX / scale, cursorY / scale
-	WoWForeverCharDB.minimapAngle = math.deg(math.atan2(cursorY - centerY, cursorX - centerX))
+	FriendInfoTrackerCharDB.minimapAngle = math.deg(math.atan2(cursorY - centerY, cursorX - centerX))
 	UpdatePosition()
 end
 
 local function CreateButton()
-	button = CreateFrame("Button", "WoWForeverMinimapButton", Minimap)
+	button = CreateFrame("Button", "FriendInfoTrackerMinimapButton", Minimap)
 	button:SetSize(31, 31)
 	button:SetFrameStrata("MEDIUM")
 	button:SetFrameLevel(8)
@@ -58,7 +58,7 @@ local function CreateButton()
 	end)
 	button:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-		GameTooltip:AddLine("WoW Forever")
+		GameTooltip:AddLine("FriendInfoTracker")
 		GameTooltip:AddLine("Click to open. Drag to move.", 1, 1, 1)
 		GameTooltip:Show()
 	end)
@@ -68,16 +68,16 @@ local function CreateButton()
 end
 
 function addon.ToggleMinimapButton()
-	WoWForeverCharDB.hideMinimapButton = not WoWForeverCharDB.hideMinimapButton
+	FriendInfoTrackerCharDB.hideMinimapButton = not FriendInfoTrackerCharDB.hideMinimapButton
 	if not button then
 		CreateButton()
 	end
-	button:SetShown(not WoWForeverCharDB.hideMinimapButton)
+	button:SetShown(not FriendInfoTrackerCharDB.hideMinimapButton)
 end
 
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:SetScript("OnEvent", function()
 	CreateButton()
-	button:SetShown(not WoWForeverCharDB.hideMinimapButton)
+	button:SetShown(not FriendInfoTrackerCharDB.hideMinimapButton)
 end)

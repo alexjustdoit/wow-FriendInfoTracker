@@ -1,4 +1,4 @@
-local addon = WoWForever
+local addon = FriendInfoTracker
 
 local ROW_HEIGHT = 20
 local ROW_WIDTH = 460
@@ -131,13 +131,13 @@ local function ShowRowTooltip(row)
 		end
 	elseif record.level and record.level.source == "bnet" then
 		GameTooltip:AddLine(" ")
-		GameTooltip:AddLine("Professions unknown: this friend isn't running WoW Forever.", 0.6, 0.6, 0.6, true)
+		GameTooltip:AddLine("Professions unknown: this friend isn't running FriendInfoTracker.", 0.6, 0.6, 0.6, true)
 	end
 	GameTooltip:Show()
 end
 
 local function CreateMainFrame()
-	local f = CreateFrame("Frame", "WoWForeverFrame", UIParent, "BasicFrameTemplateWithInset")
+	local f = CreateFrame("Frame", "FriendInfoTrackerFrame", UIParent, "BasicFrameTemplateWithInset")
 	f:SetSize(520, 360)
 	f:SetPoint("CENTER")
 	f:SetMovable(true)
@@ -148,7 +148,7 @@ local function CreateMainFrame()
 
 	f.title = f:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	f.title:SetPoint("TOP", f, "TOP", 0, -6)
-	f.title:SetText("WoW Forever")
+	f.title:SetText("FriendInfoTracker")
 
 	local scrollFrame = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
 	scrollFrame:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -32)
@@ -222,7 +222,7 @@ end
 local function BuildEntries()
 	local myTag = addon.GetMyBattleTag()
 	local groups, order = {}, {}
-	for id, record in pairs(WoWForeverDB.characters) do
+	for id, record in pairs(FriendInfoTrackerDB.characters) do
 		local isMine = (record.isMine or (myTag ~= nil and record.owner == myTag)) and true or false
 		local key = isMine and "" or (record.owner or "?")
 		if not groups[key] then
@@ -317,16 +317,16 @@ end
 addon.ToggleUI = ToggleUI
 
 local function PrintHelp()
-	print("|cff33ff99WoW Forever:|r commands")
-	print("  /wowf - toggle the window")
-	print("  /wowf sync - re-sync with online friends now")
-	print("  /wowf status - list online friends running the addon")
-	print("  /wowf minimap - show/hide the minimap button")
+	print("|cff33ff99FriendInfoTracker:|r commands")
+	print("  /fit - toggle the window")
+	print("  /fit sync - re-sync with online friends now")
+	print("  /fit status - list online friends running the addon")
+	print("  /fit minimap - show/hide the minimap button")
 end
 
-SLASH_WOWFOREVER1 = "/wowf"
-SLASH_WOWFOREVER2 = "/wowforever"
-SlashCmdList["WOWFOREVER"] = function(input)
+SLASH_FRIENDINFOTRACKER1 = "/fit"
+SLASH_FRIENDINFOTRACKER2 = "/friendinfotracker"
+SlashCmdList["FRIENDINFOTRACKER"] = function(input)
 	local command = strtrim(input or ""):lower()
 	if command == "" then
 		ToggleUI()

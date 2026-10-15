@@ -1,9 +1,9 @@
 ## Interface: 16001
-## Title: WoW Forever
+## Title: FriendInfoTracker
 ## Notes: Tracks your characters' and your Battle.net friends' levels, professions, and location.
 ## Version: 0.2.0
-## SavedVariables: WoWForeverDB
-## SavedVariablesPerCharacter: WoWForeverCharDB
+## SavedVariables: FriendInfoTrackerDB
+## SavedVariablesPerCharacter: FriendInfoTrackerCharDB
 
 Core.lua
 Serialize.lua

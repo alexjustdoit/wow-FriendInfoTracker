@@ -1,4 +1,4 @@
-# WoW Forever
+# FriendInfoTracker
 
 A WoW addon for tracking character data (names, levels, professions,
 location) across your own characters and your Battle.net friends'. Everything
@@ -16,15 +16,15 @@ v2 (uploader agent + web dashboard) is planned only.
    - **Mac:** `/Applications/World of Warcraft/_retail_/Interface/AddOns/`
    - **Windows:** `C:\Program Files (x86)\World of Warcraft\_retail_\Interface\AddOns\`
    - Create `Interface/AddOns` if it doesn't exist yet.
-2. Copy the `WoWForever` folder from this repo into it. The folder name must
-   stay exactly `WoWForever` (it has to match the `.toc` file), and the `.toc`
+2. Copy the `FriendInfoTracker` folder from this repo into it. The folder name must
+   stay exactly `FriendInfoTracker` (it has to match the `.toc` file), and the `.toc`
    must sit directly inside it:
-   `.../Interface/AddOns/WoWForever/WoWForever.toc`.
+   `.../Interface/AddOns/FriendInfoTracker/FriendInfoTracker.toc`.
    - **Developer alternative:** symlink it so edits apply without copying:
-     `ln -s "$(pwd)/WoWForever" "/Applications/World of Warcraft/_retail_/Interface/AddOns/WoWForever"`
+     `ln -s "$(pwd)/FriendInfoTracker" "/Applications/World of Warcraft/_retail_/Interface/AddOns/FriendInfoTracker"`
 3. Restart WoW completely. A `/reload` doesn't pick up a newly added addon or
    new files listed in the `.toc`.
-4. At character select, click **AddOns** and check that **WoW Forever** is
+4. At character select, click **AddOns** and check that **FriendInfoTracker** is
    enabled. If it's listed as out of date, tick **Load out of date AddOns**,
    or bump `## Interface:` in the `.toc` to the client's current version.
 5. **Recommended while testing:** run `/console scriptErrors 1` once so Lua
@@ -35,22 +35,22 @@ the game instead if the `.toc` changed or files were added.
 
 ### Test solo
 
-1. Log in. Type `/wowf`, or click the minimap button. Your current
+1. Log in. Type `/fit`, or click the minimap button. Your current
    character should appear under "Your characters", highlighted.
 2. Hover the row. The tooltip should list your professions with source
    "this account".
-3. Log in on an alt and open `/wowf`. Both characters should be listed.
+3. Log in on an alt and open `/fit`. Both characters should be listed.
 4. `/reload`, then open
-   `World of Warcraft/_retail_/WTF/Account/<ACCOUNT>/SavedVariables/WoWForever.lua`.
-   It should contain a `WoWForeverDB` table with your characters.
+   `World of Warcraft/_retail_/WTF/Account/<ACCOUNT>/SavedVariables/FriendInfoTracker.lua`.
+   It should contain a `FriendInfoTrackerDB` table with your characters.
 
 ### Test with a friend
 
 1. You and a Battle.net friend both install the addon and log in to the same
    game flavor.
-2. Wait about a minute, then both run `/wowf status`. Each of you should see
-   the other listed as running the addon. If not, run `/wowf sync`.
-3. Open `/wowf`. The friend's characters should appear under their BattleTag
+2. Wait about a minute, then both run `/fit status`. Each of you should see
+   the other listed as running the addon. If not, run `/fit sync`.
+3. Open `/fit`. The friend's characters should appear under their BattleTag
    name, with the tooltip source "their addon".
 4. **Live push:** have the friend change zones. It should show up in your
    window within about 30 seconds.
@@ -91,7 +91,7 @@ game) needs a separate program, which is what v2 adds.
   together. If Bob overlaps with each of them, Alice's data reaches Cara
   through Bob. Records keep the timestamp of when the *owner's* addon captured
   them, so relayed data is never mistaken for newer than it is.
-- **Cache:** everything received is stored in the local `WoWForeverDB`. The
+- **Cache:** everything received is stored in the local `FriendInfoTrackerDB`. The
   window reads from that cache, so it works when nobody else is online.
 - **Freshness:** each record is only as current as the newest copy held by
   anyone you overlap with. If nobody connects you to a friend, their data goes
@@ -117,7 +117,7 @@ than their real addon data, which is about to arrive.
 
 ### Sync protocol
 
-All messages go over `BNSendGameData` with prefix `WoWF`, as
+All messages go over `BNSendGameData` with prefix `FIT`, as
 `<protocol>:<TYPE>:<msgID>:<seq>:<total>:<chunk>`. Payloads are serialized
 tables (see `Serialize.lua`), split into chunks of up to 3800 bytes on UTF-8
 boundaries and sent through a paced queue.
@@ -149,13 +149,13 @@ relayed it. That's acceptable for a friend group.
 
 ## Addon data model
 
-`WoWForeverDB` is account-wide (`## SavedVariables`) and holds your own
-characters and every cached friend character. `WoWForeverCharDB` is
+`FriendInfoTrackerDB` is account-wide (`## SavedVariables`) and holds your own
+characters and every cached friend character. `FriendInfoTrackerCharDB` is
 per-character and holds UI preferences only (minimap button position and
 visibility).
 
 ```lua
-WoWForeverDB = {
+FriendInfoTrackerDB = {
   schemaVersion = 2,
   myBattleTag = "Thrall#1234",
   characters = {
@@ -212,10 +212,10 @@ WoWForeverDB = {
 
 ## In-game UI
 
-- **Entry points:** `/wowf` (or `/wowforever`) and a draggable minimap
+- **Entry points:** `/fit` (or `/friendinfotracker`) and a draggable minimap
   button. Data capture is silent, and the window only opens on demand.
-- **Commands:** `/wowf sync` (re-sync now), `/wowf status` (online friends
-  running the addon), `/wowf minimap` (show/hide the button).
+- **Commands:** `/fit sync` (re-sync now), `/fit status` (online friends
+  running the addon), `/fit minimap` (show/hide the button).
 - **Layout:** grouped by owner, with "Your characters" first and then each
   friend by BattleTag. Each row shows name (class-colored), level, zone,
   professions and how old the data is. The current character is highlighted,
@@ -230,14 +230,14 @@ WoWForeverDB = {
 
 | File | Purpose |
 |---|---|
-| `WoWForever/Core.lua` | DB init/migration, capture of own characters |
-| `WoWForever/Serialize.lua` | Dependency-free serializer and defensive deserializer |
-| `WoWForever/Sync.lua` | Friend scan, passive capture, sync protocol, merge |
-| `WoWForever/UI.lua` | Main window, tooltips, slash commands |
-| `WoWForever/Minimap.lua` | Minimap button |
+| `FriendInfoTracker/Core.lua` | DB init/migration, capture of own characters |
+| `FriendInfoTracker/Serialize.lua` | Dependency-free serializer and defensive deserializer |
+| `FriendInfoTracker/Sync.lua` | Friend scan, passive capture, sync protocol, merge |
+| `FriendInfoTracker/UI.lua` | Main window, tooltips, slash commands |
+| `FriendInfoTracker/Minimap.lua` | Minimap button |
 | `tests/sim.lua` | Out-of-game simulation: several stubbed clients wired over a fake Battle.net transport |
 
-Run the simulation with `lua tests/sim.lua WoWForever` from the repo root.
+Run the simulation with `lua tests/sim.lua FriendInfoTracker` from the repo root.
 It covers direct sync, relay without overlap, passive capture, live pushes,
 own-record protection, hostile and malformed input, large multi-chunk syncs,
 and no traffic once in sync. It runs on desktop Lua, not WoW's client, so it
@@ -269,7 +269,7 @@ These API assumptions can't be tested outside the game:
 - **v1 (built):** addon-only. Own capture, Battle.net peer sync with relay,
   passive friend-list capture, grouped in-game window, minimap button.
 - **v1.x ideas:** export window (copyable CSV for spreadsheets), a detail
-  pane, sortable columns, `/wowf forget <BattleTag>` to clear a friend's
+  pane, sortable columns, `/fit forget <BattleTag>` to clear a friend's
   cached data.
 - **v2:** uploader agent + central server + web dashboard (below).
 
@@ -285,7 +285,7 @@ outside the game and Blizzard-API data that doesn't need anyone online.
 
 ```
 [WoW Addon]  (unchanged from v1; syncs in-game with BNet friends)
-     |  writes WoWForeverDB on /reload or logout
+     |  writes FriendInfoTrackerDB on /reload or logout
      v
 [Uploader Agent]  (each opted-in friend's own machine)
      |  reads its own account's records, POSTs to the ingest API with a personal token
@@ -386,7 +386,7 @@ credentials kept outside the repo.
   ~$200–500/yr for signing.
 - **Finding the file:** auto-detect the install (Mac
   `/Applications/World of Warcraft`; Windows default path or the Battle.net
-  registry key), then scan `WTF/Account/*/SavedVariables/WoWForever.lua`
+  registry key), then scan `WTF/Account/*/SavedVariables/FriendInfoTracker.lua`
   (there may be several accounts). Ask for a path only if detection fails.
 - **Parsing:** a minimal Lua-table parser for the SavedVariables format,
   driven by `schemaVersion`. Upload only `isMine` records.
@@ -395,10 +395,10 @@ credentials kept outside the repo.
 - **Run mode:** manual launch at first, with a visible status ("last upload:
   success at 3:41pm"). Auto-start (LaunchAgent / Startup folder) later.
 - **Failures:** retry with backoff, and fail silently if the server is
-  unreachable. Show a clear "waiting for WoW Forever addon data..." state if
+  unreachable. Show a clear "waiting for FriendInfoTracker addon data..." state if
   the file doesn't exist yet.
 - **Trust messaging:** the onboarding page states plainly that the agent
-  reads only `WoWForeverDB` and uploads only your own characters. To stop,
+  reads only `FriendInfoTrackerDB` and uploads only your own characters. To stop,
   delete the app, or the host revokes the token.
 
 ## Roster puller (Blizzard API)
