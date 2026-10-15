@@ -73,6 +73,7 @@ Note anything that doesn't match. These tests also cover the items under
 | `/fit` | Opens or closes the main window: your characters and every cached friend's characters, grouped by owner. Clicking the minimap button does the same. |
 | `/fit sync` | Re-syncs with all online friends now: re-greets everyone and exchanges data again. Use it if a friend's data looks out of date while they're online. |
 | `/fit status` | Prints how many friends are online in WoW, and which of them are running the addon. |
+| `/fit settings` | Opens or closes the Settings panel (same as the window's **Settings** button). |
 | `/fit minimap` | Shows or hides the minimap button (saved per character). |
 | `/fit help` | Lists these commands. Any unrecognized subcommand does the same. |
 
@@ -164,9 +165,13 @@ relayed it. That's acceptable for a friend group.
 ## Addon data model
 
 `FriendInfoTrackerDB` is account-wide (`## SavedVariables`) and holds your own
-characters and every cached friend character. `FriendInfoTrackerCharDB` is
-per-character and holds UI preferences only (minimap button position and
-visibility).
+characters and every cached friend character. The other two tables hold UI
+preferences only, so the data table stays pure character data:
+
+- `FriendInfoTrackerSettings` (account-wide): `hiddenFriends`, a set of
+  BattleTags moved to the Hidden section.
+- `FriendInfoTrackerCharDB` (per character): minimap button position and
+  visibility.
 
 ```lua
 FriendInfoTrackerDB = {
@@ -195,7 +200,7 @@ FriendInfoTrackerDB = {
         zone = "Stormwind City", subzone = "Trade District", mapID = 84,
         inInstance = false, updatedAt = 1759903180, source = "self",
       },
-      meta = { addonVersion = "0.3.0", lastLogout = 1759903200 },  -- local only
+      meta = { addonVersion = "0.4.0", lastLogout = 1759903200 },  -- local only
     },
     ["Jaina-Proudmoore-US"] = {
       owner = "Jaina#5678",
@@ -276,6 +281,20 @@ on a character, and updated whenever it's opened again.
   row again, or the panel's close button, to fold it away. Rows with
   recorded recipes show a small arrow. If no recipes are recorded yet, the
   panel says how to record them, or that the friend doesn't run the addon.
+- **Hiding friends:** each friend's group header has a **Hide** button.
+  Hidden friends and their characters move to a **Hidden** section at the
+  bottom of the list. It's collapsed by default each session; click its
+  header to expand it, where hidden friends appear dimmed with a **Show**
+  button. Hiding is account-wide, by BattleTag, and only affects the display:
+  hidden friends' data is still captured, synced and relayed.
+- **Settings panel:** the **Settings** button (bottom-left, or
+  `/fit settings`) folds out a panel on the right with all options:
+  - *General:* show minimap button.
+  - *Friends:* one checkbox per known friend, with their character count.
+    Unchecked friends are hidden.
+
+  The Settings and recipe panels share that space, so opening one closes the
+  other.
 - **Row tooltip:** realm, owner, subzone, and each section's age and source
   ("this account", "their addon", "relayed via Bob", "friend list").
 - **Hygiene:** Blizzard's own templates (no UI library), frame created
@@ -298,7 +317,7 @@ own-record protection, hostile and malformed input, large multi-chunk syncs,
 no traffic once in sync, recipe capture (grow-only, pruning, Craft window,
 sync), the Vanilla skill-line profession path, splitting large payloads into
 batches, and a UI smoke test (rows, columns, recipe panel) against stubbed
-frames. It runs on desktop Lua, not WoW's client, so it
+frames, plus hiding friends, the Hidden section and the Settings panel. It runs on desktop Lua, not WoW's client, so it
 checks the logic but not the WoW API behaviour.
 
 ## Verify in a live client

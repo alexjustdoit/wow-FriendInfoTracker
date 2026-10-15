@@ -87,6 +87,10 @@ local function InitDB()
 	FriendInfoTrackerDB.characters = FriendInfoTrackerDB.characters or {}
 	MigrateDB()
 	FriendInfoTrackerCharDB = FriendInfoTrackerCharDB or {}
+	-- Account-wide UI settings, kept out of FriendInfoTrackerDB so that table
+	-- stays pure character data.
+	FriendInfoTrackerSettings = FriendInfoTrackerSettings or {}
+	FriendInfoTrackerSettings.hiddenFriends = FriendInfoTrackerSettings.hiddenFriends or {}
 end
 
 local function GetCharacterRecord()

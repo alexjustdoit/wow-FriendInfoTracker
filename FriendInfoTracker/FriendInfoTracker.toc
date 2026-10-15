@@ -1,8 +1,8 @@
 ## Interface: 16001
 ## Title: FriendInfoTracker
 ## Notes: Tracks your characters' and your Battle.net friends' levels, professions, and location.
-## Version: 0.3.0
-## SavedVariables: FriendInfoTrackerDB
+## Version: 0.4.0
+## SavedVariables: FriendInfoTrackerDB, FriendInfoTrackerSettings
 ## SavedVariablesPerCharacter: FriendInfoTrackerCharDB
 
 Core.lua

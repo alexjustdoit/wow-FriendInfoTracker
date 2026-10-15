@@ -44,6 +44,8 @@ local function stubFrame(env)
 		GetHeight = function(self) return self.height end,
 		SetText = function(self, t) self.text = t end,
 		GetStringHeight = function() return 12 end,
+		SetChecked = function(self, v) self.checked = v and true or false end,
+		GetChecked = function(self) return self.checked end,
 	}
 	local mt = {
 		__index = function(_, k)
@@ -407,6 +409,95 @@ local ok, err = pcall(function()
 	CA.ToggleUI()
 end)
 check("UI renders rows, columns, and recipe panel" .. (ok and "" or (": " .. tostring(err))), ok)
+
+-- 14. Hidden friends section and Settings panel
+local ok2, err2 = pcall(function()
+	local UI = C.env.FriendInfoTracker
+	UI.ToggleUI()
+	local mainFrame = C.env.FriendInfoTrackerFrame
+	local function visibleEntries()
+		local list = {}
+		for _, row in ipairs(mainFrame.rows) do
+			if row.shown and row.entry then list[#list + 1] = row.entry end
+		end
+		return list
+	end
+	local function find(pred)
+		for _, row in ipairs(mainFrame.rows) do
+			if row.shown and row.entry and pred(row.entry) then return row end
+		end
+	end
+
+	assert(not find(function(e) return e.kind == "hiddenHeader" end), "no Hidden section before hiding anyone")
+
+	-- Hide Bob with the group header's Hide button
+	local bobHeader = find(function(e) return e.kind == "group" and e.key == "Bob#2222" end)
+	assert(bobHeader and bobHeader.toggle.text == "Hide", "Bob's header has a Hide button")
+	bobHeader.toggle.scripts.OnClick(bobHeader.toggle)
+	assert(C.env.FriendInfoTrackerSettings.hiddenFriends["Bob#2222"], "Bob stored as hidden")
+
+	local entries = visibleEntries()
+	local last = entries[#entries]
+	assert(last.kind == "hiddenHeader" and last.count == 1, "Hidden section is last, with 1 friend")
+	assert(not find(function(e) return e.kind == "character" and e.id == bobID end), "Bob's characters collapsed away")
+	local ownHeader = find(function(e) return e.kind == "group" and e.isMine end)
+	assert(ownHeader and not ownHeader.toggle.shown, "own group has no Hide button")
+
+	-- Expand the Hidden section
+	local hiddenRow = find(function(e) return e.kind == "hiddenHeader" end)
+	hiddenRow.scripts.OnClick(hiddenRow)
+	local bobRow = find(function(e) return e.kind == "character" and e.id == bobID end)
+	assert(bobRow and bobRow.entry.dimmed, "expanded Hidden section shows Bob dimmed")
+	entries = visibleEntries()
+	local sawHidden = false
+	for _, e in ipairs(entries) do
+		if e.kind == "hiddenHeader" then sawHidden = true end
+		if e.kind == "character" and e.id == bobID then assert(sawHidden, "Bob listed below the Hidden header") end
+	end
+
+	-- Show Bob again via the header button inside the Hidden section
+	bobHeader = find(function(e) return e.kind == "group" and e.key == "Bob#2222" end)
+	assert(bobHeader.toggle.text == "Show", "hidden friend's button says Show")
+	bobHeader.toggle.scripts.OnClick(bobHeader.toggle)
+	assert(not C.env.FriendInfoTrackerSettings.hiddenFriends["Bob#2222"], "Bob unhidden")
+	assert(not find(function(e) return e.kind == "hiddenHeader" end), "Hidden section gone when empty")
+
+	-- Settings panel: friend checkboxes, minimap toggle
+	UI.ToggleSettings()
+	local panel = C.env.FriendInfoTrackerSettingsPanel
+	assert(panel:IsShown(), "settings panel open")
+	local bobCheck
+	for _, check in ipairs(panel.friendChecks) do
+		if check.shown and check.friendKey == "Bob#2222" then bobCheck = check end
+	end
+	assert(bobCheck and bobCheck.checked == true, "Bob listed and checked (visible)")
+	bobCheck:SetChecked(false)
+	bobCheck.scripts.OnClick(bobCheck)
+	assert(C.env.FriendInfoTrackerSettings.hiddenFriends["Bob#2222"], "unchecking hides Bob")
+	assert(find(function(e) return e.kind == "hiddenHeader" end), "Hidden section appears")
+	bobCheck:SetChecked(true)
+	bobCheck.scripts.OnClick(bobCheck)
+	assert(not C.env.FriendInfoTrackerSettings.hiddenFriends["Bob#2222"], "checking shows Bob")
+
+	panel.minimapCheck:SetChecked(false)
+	panel.minimapCheck.scripts.OnClick(panel.minimapCheck)
+	assert(C.env.FriendInfoTrackerCharDB.hideMinimapButton == true, "minimap hidden via settings")
+	panel.minimapCheck:SetChecked(true)
+	panel.minimapCheck.scripts.OnClick(panel.minimapCheck)
+	assert(C.env.FriendInfoTrackerCharDB.hideMinimapButton == false, "minimap shown via settings")
+
+	-- Recipe panel and settings are mutually exclusive
+	bobRow = find(function(e) return e.kind == "character" and e.id == bobID end)
+	bobRow.scripts.OnClick(bobRow)
+	assert(C.env.FriendInfoTrackerRecipes:IsShown() and not panel:IsShown(), "opening recipes closes settings")
+	UI.ToggleSettings()
+	assert(panel:IsShown() and not C.env.FriendInfoTrackerRecipes:IsShown(), "opening settings closes recipes")
+
+	-- Closing the main window closes the panels
+	UI.ToggleUI()
+	assert(not panel:IsShown(), "closing main window closes settings")
+end)
+check("hidden friends + settings panel" .. (ok2 and "" or (": " .. tostring(err2))), ok2)
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

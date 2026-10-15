@@ -19,8 +19,22 @@ local COLUMNS = {
 	{ key = "updated", label = "Updated", x = 654, width = 54 },
 }
 
-local frame, recipePanel
+local SETTINGS_ROW_HEIGHT = 24
+
+local frame, recipePanel, settingsPanel
 local selectedID
+local hiddenExpanded = false -- the Hidden section starts collapsed each session
+
+-- Friends are hidden by BattleTag (account-wide setting).
+local function IsFriendHidden(battleTag)
+	return FriendInfoTrackerSettings.hiddenFriends[battleTag] == true
+end
+
+function addon.SetFriendHidden(battleTag, hidden)
+	FriendInfoTrackerSettings.hiddenFriends[battleTag] = hidden and true or nil
+	addon.RefreshFrame()
+	addon.RefreshSettings()
+end
 
 ---------------------------------------------------------------------------
 -- Formatting helpers
@@ -209,6 +223,9 @@ local function ToggleRecipePanel(id)
 		recipePanel:Hide() -- OnHide clears the selection
 		return
 	end
+	if settingsPanel then
+		settingsPanel:Hide()
+	end
 	selectedID = id
 	recipePanel:Show()
 	RefreshRecipePanel()
@@ -221,7 +238,14 @@ end
 
 local function ShowRowTooltip(row)
 	local entry = row.entry
-	if not entry or entry.header then
+	if entry and entry.kind == "hiddenHeader" then
+		GameTooltip:SetOwner(row, "ANCHOR_CURSOR")
+		GameTooltip:AddLine(hiddenExpanded and "Click to collapse" or "Click to expand", 1, 1, 1)
+		GameTooltip:AddLine("Show or hide friends from the Settings panel or a friend's Hide button.", 0.7, 0.7, 0.7, true)
+		GameTooltip:Show()
+		return
+	end
+	if not entry or entry.kind ~= "character" then
 		return
 	end
 	local record = entry.record
@@ -289,20 +313,31 @@ local function CreateMainFrame()
 
 	local scrollFrame = CreateFrame("ScrollFrame", nil, f, "UIPanelScrollFrameTemplate")
 	scrollFrame:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -54)
-	scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 10)
+	scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 38)
 
 	local scrollChild = CreateFrame("Frame", nil, scrollFrame)
 	scrollChild:SetSize(ROW_WIDTH, 1)
+
+	local settingsButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+	settingsButton:SetSize(90, 22)
+	settingsButton:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", 12, 10)
+	settingsButton:SetText("Settings")
+	settingsButton:SetScript("OnClick", function()
+		addon.ToggleSettings()
+	end)
 	scrollFrame:SetScrollChild(scrollChild)
 
 	f.scrollChild = scrollChild
 	f.rows = {}
 
-	-- Closing the main window also closes the recipe panel, so it doesn't
-	-- reappear with a stale selection next time.
+	-- Closing the main window also closes the fold-out panels, so they don't
+	-- reappear with stale content next time.
 	f:SetScript("OnHide", function()
 		if recipePanel then
 			recipePanel:Hide()
+		end
+		if settingsPanel then
+			settingsPanel:Hide()
 		end
 	end)
 
@@ -331,8 +366,15 @@ local function GetOrCreateRow(parent, index)
 	row:SetScript("OnEnter", ShowRowTooltip)
 	row:SetScript("OnLeave", GameTooltip_Hide)
 	row:SetScript("OnClick", function(self)
-		if self.entry and not self.entry.header then
-			ToggleRecipePanel(self.entry.id)
+		local entry = self.entry
+		if not entry then
+			return
+		end
+		if entry.kind == "character" then
+			ToggleRecipePanel(entry.id)
+		elseif entry.kind == "hiddenHeader" then
+			hiddenExpanded = not hiddenExpanded
+			addon.RefreshFrame()
 		end
 	end)
 
@@ -350,7 +392,22 @@ local function GetOrCreateRow(parent, index)
 	row.separator:SetPoint("BOTTOMRIGHT")
 
 	row.header = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	row.header:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 4)
+
+	-- Plus/minus icon for the Hidden section header
+	row.expand = row:CreateTexture(nil, "OVERLAY")
+	row.expand:SetSize(14, 14)
+	row.expand:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 5)
+
+	-- Per-friend Hide/Show button on friend group headers
+	row.toggle = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+	row.toggle:SetSize(60, 18)
+	row.toggle:SetPoint("BOTTOMRIGHT", row, "BOTTOMRIGHT", -4, 4)
+	row.toggle:SetScript("OnClick", function()
+		local entry = row.entry
+		if entry and entry.kind == "group" and not entry.isMine then
+			addon.SetFriendHidden(entry.key, not entry.hidden)
+		end
+	end)
 	row.headerLine = row:CreateTexture(nil, "ARTWORK")
 	row.headerLine:SetColorTexture(1, 0.82, 0, 0.35)
 	row.headerLine:SetHeight(1)
@@ -378,9 +435,10 @@ local function GetOrCreateRow(parent, index)
 	return row
 end
 
--- Flattens the DB into display entries: a header per owner (this account
--- first, then friends alphabetically), each followed by its characters
--- sorted most-recently-updated first.
+-- Flattens the DB into display entries. Visible groups come first (this
+-- account, then friends alphabetically), each a header followed by its
+-- characters sorted most-recently-updated first. Hidden friends go last,
+-- under a collapsible "Hidden" header.
 local function BuildEntries()
 	local myTag = addon.GetMyBattleTag()
 	local groups, order = {}, {}
@@ -388,10 +446,10 @@ local function BuildEntries()
 		local isMine = (record.isMine or (myTag ~= nil and record.owner == myTag)) and true or false
 		local key = isMine and "" or (record.owner or "?")
 		if not groups[key] then
-			groups[key] = { key = key, isMine = isMine, characters = {} }
+			groups[key] = { key = key, isMine = isMine, hidden = not isMine and IsFriendHidden(key), characters = {} }
 			order[#order + 1] = groups[key]
 		end
-		table.insert(groups[key].characters, { id = id, record = record, updatedAt = LastUpdated(record) or 0 })
+		table.insert(groups[key].characters, { kind = "character", id = id, record = record, updatedAt = LastUpdated(record) or 0 })
 	end
 
 	table.sort(order, function(a, b)
@@ -401,15 +459,38 @@ local function BuildEntries()
 		return ShortTag(a.key):lower() < ShortTag(b.key):lower()
 	end)
 
-	local entries = {}
-	for _, group in ipairs(order) do
-		local title = group.isMine and "Your characters" or Safe(ShortTag(group.key))
-		entries[#entries + 1] = { header = title }
+	local entries, hiddenGroups = {}, {}
+	local function AddGroup(group, dimmed)
+		entries[#entries + 1] = {
+			kind = "group",
+			title = group.isMine and "Your characters" or Safe(ShortTag(group.key)),
+			key = group.key,
+			isMine = group.isMine,
+			hidden = group.hidden,
+			dimmed = dimmed,
+		}
 		table.sort(group.characters, function(a, b)
 			return a.updatedAt > b.updatedAt
 		end)
 		for _, character in ipairs(group.characters) do
+			character.dimmed = dimmed
 			entries[#entries + 1] = character
+		end
+	end
+
+	for _, group in ipairs(order) do
+		if group.hidden then
+			hiddenGroups[#hiddenGroups + 1] = group
+		else
+			AddGroup(group, false)
+		end
+	end
+	if #hiddenGroups > 0 then
+		entries[#entries + 1] = { kind = "hiddenHeader", count = #hiddenGroups }
+		if hiddenExpanded then
+			for _, group in ipairs(hiddenGroups) do
+				AddGroup(group, true)
+			end
 		end
 	end
 	return entries
@@ -444,7 +525,32 @@ local function ShowCharacterRow(row, entry, currentID)
 
 	row.arrow:SetShown(#RecipeLists(record) > 0)
 	local isStale = entry.updatedAt > 0 and (time() - entry.updatedAt) > STALE_AFTER_SECONDS
-	row:SetAlpha(isStale and 0.5 or 1)
+	row:SetAlpha((isStale or entry.dimmed) and 0.5 or 1)
+end
+
+local function ShowHeaderRow(row, entry)
+	row:SetHeight(HEADER_ROW_HEIGHT)
+	row.bg:Hide()
+	row.arrow:Hide()
+	row.header:ClearAllPoints()
+
+	if entry.kind == "hiddenHeader" then
+		row.expand:SetTexture(hiddenExpanded and "Interface\\Buttons\\UI-MinusButton-Up" or "Interface\\Buttons\\UI-PlusButton-Up")
+		row.expand:Show()
+		row.header:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 22, 4)
+		row.header:SetText(string.format("Hidden %s", Gray("(" .. entry.count .. (entry.count == 1 and " friend)" or " friends)"))))
+		row.toggle:Hide()
+		row:SetAlpha(0.8)
+		row:EnableMouse(true)
+	else
+		row.expand:Hide()
+		row.header:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 4, 4)
+		row.header:SetText(entry.title)
+		row.toggle:SetShown(not entry.isMine)
+		row.toggle:SetText(entry.hidden and "Show" or "Hide")
+		row:SetAlpha(entry.dimmed and 0.6 or 1)
+		row:EnableMouse(false)
+	end
 end
 
 local function RefreshFrame()
@@ -460,7 +566,7 @@ local function RefreshFrame()
 		local row = GetOrCreateRow(frame, index)
 		row.entry = entry
 
-		local isHeader = entry.header ~= nil
+		local isHeader = entry.kind ~= "character"
 		row.header:SetShown(isHeader)
 		row.headerLine:SetShown(isHeader)
 		row.separator:SetShown(not isHeader)
@@ -469,13 +575,10 @@ local function RefreshFrame()
 		end
 
 		if isHeader then
-			row:SetHeight(HEADER_ROW_HEIGHT)
-			row.header:SetText(entry.header)
-			row.bg:Hide()
-			row.arrow:Hide()
-			row:SetAlpha(1)
-			row:EnableMouse(false)
+			ShowHeaderRow(row, entry)
 		else
+			row.expand:Hide()
+			row.toggle:Hide()
 			ShowCharacterRow(row, entry, currentID)
 			row:EnableMouse(true)
 		end
@@ -493,8 +596,129 @@ local function RefreshFrame()
 
 	frame.scrollChild:SetHeight(math.max(1, offset))
 	RefreshRecipePanel()
+	addon.RefreshSettings()
 end
 addon.RefreshFrame = RefreshFrame
+
+---------------------------------------------------------------------------
+-- Settings fold-out panel
+---------------------------------------------------------------------------
+
+local function CreateCheck(parent)
+	local check = CreateFrame("CheckButton", nil, parent, "UICheckButtonTemplate")
+	check:SetSize(24, 24)
+	check.label = check:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	check.label:SetPoint("LEFT", check, "RIGHT", 2, 1)
+	return check
+end
+
+local function CreateSectionHeader(parent, text, y)
+	local header = parent:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	header:SetPoint("TOPLEFT", parent, "TOPLEFT", 2, y)
+	header:SetText(text)
+	local line = parent:CreateTexture(nil, "ARTWORK")
+	line:SetColorTexture(1, 0.82, 0, 0.35)
+	line:SetHeight(1)
+	line:SetPoint("TOPLEFT", parent, "TOPLEFT", 0, y - 16)
+	line:SetPoint("TOPRIGHT", parent, "TOPRIGHT", 0, y - 16)
+	return header
+end
+
+local FRIEND_LIST_TOP = -108
+
+local function CreateSettingsPanel(parent)
+	local panel = CreateFrame("Frame", "FriendInfoTrackerSettingsPanel", parent, "BasicFrameTemplateWithInset")
+	panel:SetSize(RECIPE_PANEL_WIDTH, FRAME_HEIGHT)
+	panel:SetPoint("TOPLEFT", parent, "TOPRIGHT", -2, 0)
+
+	panel.title = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	panel.title:SetPoint("TOP", panel, "TOP", 0, -6)
+	panel.title:SetText("Settings")
+
+	local scrollFrame = CreateFrame("ScrollFrame", nil, panel, "UIPanelScrollFrameTemplate")
+	scrollFrame:SetPoint("TOPLEFT", panel, "TOPLEFT", 12, -32)
+	scrollFrame:SetPoint("BOTTOMRIGHT", panel, "BOTTOMRIGHT", -32, 10)
+
+	local content = CreateFrame("Frame", nil, scrollFrame)
+	content:SetSize(RECIPE_PANEL_WIDTH - 48, 1)
+	scrollFrame:SetScrollChild(content)
+	panel.content = content
+
+	-- General
+	CreateSectionHeader(content, "General", -4)
+	panel.minimapCheck = CreateCheck(content)
+	panel.minimapCheck:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -26)
+	panel.minimapCheck.label:SetText("Show minimap button")
+	panel.minimapCheck:SetScript("OnClick", function(self)
+		addon.SetMinimapButtonShown(self:GetChecked() and true or false)
+	end)
+
+	-- Friends
+	CreateSectionHeader(content, "Friends", -62)
+	local hint = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	hint:SetPoint("TOPLEFT", content, "TOPLEFT", 2, -84)
+	hint:SetWidth(RECIPE_PANEL_WIDTH - 52)
+	hint:SetJustifyH("LEFT")
+	hint:SetText("Unchecked friends move to the collapsed Hidden section at the bottom.")
+
+	panel.emptyText = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	panel.emptyText:SetPoint("TOPLEFT", content, "TOPLEFT", 2, FRIEND_LIST_TOP - 4)
+	panel.emptyText:SetText("No friends recorded yet.")
+
+	panel.friendChecks = {}
+	panel:Hide()
+	return panel
+end
+
+-- Friends (by BattleTag) with cached characters, sorted by display name.
+local function KnownFriends()
+	local myTag = addon.GetMyBattleTag()
+	local counts = {}
+	for _, record in pairs(FriendInfoTrackerDB.characters) do
+		local isMine = record.isMine or (myTag ~= nil and record.owner == myTag)
+		if not isMine then
+			local key = record.owner or "?"
+			counts[key] = (counts[key] or 0) + 1
+		end
+	end
+	local friends = {}
+	for key, count in pairs(counts) do
+		friends[#friends + 1] = { key = key, count = count }
+	end
+	table.sort(friends, function(a, b)
+		return ShortTag(a.key):lower() < ShortTag(b.key):lower()
+	end)
+	return friends
+end
+
+function addon.RefreshSettings()
+	if not settingsPanel or not settingsPanel:IsShown() then
+		return
+	end
+	settingsPanel.minimapCheck:SetChecked(addon.IsMinimapButtonShown())
+
+	local friends = KnownFriends()
+	for index, friend in ipairs(friends) do
+		local check = settingsPanel.friendChecks[index]
+		if not check then
+			check = CreateCheck(settingsPanel.content)
+			check:SetPoint("TOPLEFT", settingsPanel.content, "TOPLEFT", 0, FRIEND_LIST_TOP - (index - 1) * SETTINGS_ROW_HEIGHT)
+			check:SetScript("OnClick", function(self)
+				addon.SetFriendHidden(self.friendKey, not self:GetChecked())
+			end)
+			settingsPanel.friendChecks[index] = check
+		end
+		check.friendKey = friend.key
+		check.label:SetText(Safe(ShortTag(friend.key)) .. " " .. Gray("(" .. friend.count .. (friend.count == 1 and " character)" or " characters)")))
+		check:SetChecked(not IsFriendHidden(friend.key))
+		check:Show()
+	end
+	for index = #friends + 1, #settingsPanel.friendChecks do
+		settingsPanel.friendChecks[index]:Hide()
+	end
+	settingsPanel.emptyText:SetShown(#friends == 0)
+	settingsPanel.content:SetHeight(-FRIEND_LIST_TOP + math.max(1, #friends) * SETTINGS_ROW_HEIGHT + 8)
+end
 
 local function ToggleUI()
 	if not frame then
@@ -509,11 +733,34 @@ local function ToggleUI()
 end
 addon.ToggleUI = ToggleUI
 
+function addon.ToggleSettings()
+	if not frame then
+		frame = CreateMainFrame()
+	end
+	if not frame:IsShown() then
+		frame:Show()
+		RefreshFrame()
+	end
+	if not settingsPanel then
+		settingsPanel = CreateSettingsPanel(frame)
+	end
+	if settingsPanel:IsShown() then
+		settingsPanel:Hide()
+		return
+	end
+	if recipePanel then
+		recipePanel:Hide()
+	end
+	settingsPanel:Show()
+	addon.RefreshSettings()
+end
+
 local function PrintHelp()
 	print("|cff33ff99FriendInfoTracker:|r commands")
 	print("  /fit - toggle the window")
 	print("  /fit sync - re-sync with online friends now")
 	print("  /fit status - list online friends running the addon")
+	print("  /fit settings - open the settings panel")
 	print("  /fit minimap - show/hide the minimap button")
 end
 
@@ -527,6 +774,8 @@ SlashCmdList["FRIENDINFOTRACKER"] = function(input)
 		addon.ForceSync()
 	elseif command == "status" then
 		addon.PrintStatus()
+	elseif command == "settings" then
+		addon.ToggleSettings()
 	elseif command == "minimap" then
 		addon.ToggleMinimapButton()
 	else

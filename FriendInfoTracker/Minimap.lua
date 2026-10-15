@@ -67,12 +67,23 @@ local function CreateButton()
 	UpdatePosition()
 end
 
-function addon.ToggleMinimapButton()
-	FriendInfoTrackerCharDB.hideMinimapButton = not FriendInfoTrackerCharDB.hideMinimapButton
+function addon.SetMinimapButtonShown(shown)
+	FriendInfoTrackerCharDB.hideMinimapButton = not shown
 	if not button then
 		CreateButton()
 	end
-	button:SetShown(not FriendInfoTrackerCharDB.hideMinimapButton)
+	button:SetShown(shown)
+	if addon.RefreshSettings then
+		addon.RefreshSettings()
+	end
+end
+
+function addon.IsMinimapButtonShown()
+	return not FriendInfoTrackerCharDB.hideMinimapButton
+end
+
+function addon.ToggleMinimapButton()
+	addon.SetMinimapButtonShown(not addon.IsMinimapButtonShown())
 end
 
 local eventFrame = CreateFrame("Frame")
