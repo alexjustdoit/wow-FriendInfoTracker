@@ -64,6 +64,18 @@ the game instead if the `.toc` changed or files were added.
 Note anything that doesn't match. These tests also cover the items under
 "Verify in a live client" below.
 
+## Commands
+
+`/friendinfotracker` works anywhere `/fit` does.
+
+| Command | What it does |
+|---|---|
+| `/fit` | Opens or closes the main window: your characters and every cached friend's characters, grouped by owner. Clicking the minimap button does the same. |
+| `/fit sync` | Re-syncs with all online friends now: re-greets everyone and exchanges data again. Use it if a friend's data looks out of date while they're online. |
+| `/fit status` | Prints how many friends are online in WoW, and which of them are running the addon. |
+| `/fit minimap` | Shows or hides the minimap button (saved per character). |
+| `/fit help` | Lists these commands. Any unrecognized subcommand does the same. |
+
 ## v1 principle: the addon is the whole product
 
 Installing the addon is the only setup. There's no companion app, server or
@@ -214,8 +226,7 @@ FriendInfoTrackerDB = {
 
 - **Entry points:** `/fit` (or `/friendinfotracker`) and a draggable minimap
   button. Data capture is silent, and the window only opens on demand.
-- **Commands:** `/fit sync` (re-sync now), `/fit status` (online friends
-  running the addon), `/fit minimap` (show/hide the button).
+- **Commands:** see [Commands](#commands).
 - **Layout:** grouped by owner, with "Your characters" first and then each
   friend by BattleTag. Each row shows name (class-colored), level, zone,
   professions and how old the data is. The current character is highlighted,
