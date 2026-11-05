@@ -433,13 +433,13 @@ local function ShowRowTooltip(row)
 		{ "recipes", "Recipes" },
 	}
 	for _, section in ipairs(sections) do
-		local text = SourceText(record, section[1])
-		if text then
-			GameTooltip:AddDoubleLine(section[2], text, 1, 0.82, 0, 0.7, 0.7, 0.7)
-		end
 		if section[1] == "level" and identity.class then
 			local className = LOCALIZED_CLASS_NAMES_MALE and LOCALIZED_CLASS_NAMES_MALE[identity.class] or identity.class
 			GameTooltip:AddDoubleLine("Class", ClassColorString(Safe(className), identity.class), 1, 0.82, 0, 0.7, 0.7, 0.7)
+		end
+		local text = SourceText(record, section[1])
+		if text then
+			GameTooltip:AddDoubleLine(section[2], text, 1, 0.82, 0, 0.7, 0.7, 0.7)
 		end
 	end
 	GameTooltip:AddLine(" ")
