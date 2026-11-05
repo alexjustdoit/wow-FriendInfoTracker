@@ -3,6 +3,15 @@
 All notable changes to FriendInfoTracker. Releases are on the
 [GitHub releases page](https://github.com/alexjustdoit/wow-FriendInfoTracker/releases).
 
+## [0.7.0] - 2026-11-05
+
+### Added
+- Friends' Battle.net real names are shown next to their BattleTag (Real ID friends only). They are stored locally and never synced.
+- MIT license and automated packaging for CurseForge releases.
+
+### Changed
+- Tooltip order is now Class, Level, Location.
+
 ## [0.6.0] - 2026-11-05
 
 ### Added
