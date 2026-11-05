@@ -3,6 +3,15 @@
 All notable changes to FriendInfoTracker. Releases are on the
 [GitHub releases page](https://github.com/alexjustdoit/wow-FriendInfoTracker/releases).
 
+## [0.7.1] - 2026-11-05
+
+### Changed
+- Real names are now entered manually in Settings (a text box under each friend) instead of read from Battle.net, which returned unreadable ids. Names are stored locally only.
+- Tooltip no longer shows the realm line.
+
+### Fixed
+- Release packaging workflow (the v0.7.0 tag was never published).
+
 ## [0.7.0] - 2026-11-05
 
 ### Added

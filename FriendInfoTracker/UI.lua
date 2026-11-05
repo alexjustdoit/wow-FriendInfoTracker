@@ -19,7 +19,7 @@ local COLUMNS = {
 	{ key = "updated", label = "Updated", x = 654, width = 54 },
 }
 
-local SETTINGS_ROW_HEIGHT = 24
+local SETTINGS_ROW_HEIGHT = 50
 
 local frame, recipePanel, settingsPanel
 local selectedID
@@ -28,6 +28,13 @@ local hiddenExpanded = false -- the Hidden section starts collapsed each session
 -- Friends are hidden by BattleTag (account-wide setting).
 local function IsFriendHidden(battleTag)
 	return FriendInfoTrackerSettings.hiddenFriends[battleTag] == true
+end
+
+function addon.SetFriendName(battleTag, name)
+	name = strtrim(name or "")
+	FriendInfoTrackerSettings.friendNames[battleTag] = name ~= "" and name or nil
+	addon.RefreshFrame()
+	addon.RefreshSettings()
 end
 
 function addon.SetFriendHidden(battleTag, hidden)
@@ -78,10 +85,10 @@ local function Gray(text)
 	return "|cff808080" .. text .. "|r"
 end
 
--- "Name (Real Name)" for friends whose Battle.net real name is known.
+-- "Name (Real Name)" when the user has entered a name for the friend.
 local function FriendTitle(battleTag)
 	local title = Safe(ShortTag(battleTag))
-	local realName = FriendInfoTrackerSettings.realNames[battleTag]
+	local realName = FriendInfoTrackerSettings.friendNames[battleTag]
 	return realName and (title .. " " .. Gray("(" .. Safe(realName) .. ")")) or title
 end
 
@@ -415,9 +422,6 @@ local function ShowRowTooltip(row)
 
 	GameTooltip:SetOwner(row, "ANCHOR_CURSOR")
 	GameTooltip:AddLine(ClassColorString(Safe(identity.name or entry.id), identity.class))
-	if identity.realmDisplay then
-		GameTooltip:AddLine(Safe(identity.realmDisplay) .. (identity.region and (" (" .. Safe(identity.region) .. ")") or ""), 1, 1, 1)
-	end
 	if record.owner then
 		GameTooltip:AddLine(Safe(record.owner), 0.6, 0.6, 0.6)
 	end
@@ -811,7 +815,7 @@ local function CreateSettingsPanel(parent)
 	hint:SetPoint("TOPLEFT", content, "TOPLEFT", 2, -84)
 	hint:SetWidth(RECIPE_PANEL_WIDTH - 52)
 	hint:SetJustifyH("LEFT")
-	hint:SetText("Unchecked friends move to the collapsed Hidden section at the bottom.")
+	hint:SetText("Unchecked friends move to the collapsed Hidden section. Use the box under each friend to set their real name.")
 
 	panel.emptyText = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
 	panel.emptyText:SetPoint("TOPLEFT", content, "TOPLEFT", 2, FRIEND_LIST_TOP - 4)
@@ -859,14 +863,39 @@ function addon.RefreshSettings()
 				addon.SetFriendHidden(self.friendKey, not self:GetChecked())
 			end)
 			settingsPanel.friendChecks[index] = check
+
+			local edit = CreateFrame("EditBox", nil, settingsPanel.content, "InputBoxTemplate")
+			edit:SetSize(RECIPE_PANEL_WIDTH - 90, 20)
+			edit:SetPoint("TOPLEFT", check, "BOTTOMLEFT", 30, -2)
+			edit:SetAutoFocus(false)
+			edit:SetMaxLetters(40)
+			edit:SetScript("OnEnterPressed", function(self)
+				self:ClearFocus()
+			end)
+			edit:SetScript("OnEscapePressed", function(self)
+				self:SetText(FriendInfoTrackerSettings.friendNames[self.friendKey] or "")
+				self:ClearFocus()
+			end)
+			edit:SetScript("OnEditFocusLost", function(self)
+				if self.friendKey and strtrim(self:GetText()) ~= (FriendInfoTrackerSettings.friendNames[self.friendKey] or "") then
+					addon.SetFriendName(self.friendKey, self:GetText())
+				end
+			end)
+			check.edit = edit
 		end
 		check.friendKey = friend.key
-		check.label:SetText(FriendTitle(friend.key) .. " " .. Gray("(" .. friend.count .. (friend.count == 1 and " character)" or " characters)")))
+		check.edit.friendKey = friend.key
+		if not check.edit:HasFocus() then
+			check.edit:SetText(FriendInfoTrackerSettings.friendNames[friend.key] or "")
+		end
+		check.edit:Show()
+		check.label:SetText(Safe(ShortTag(friend.key)) .. " " .. Gray("(" .. friend.count .. (friend.count == 1 and " character)" or " characters)")))
 		check:SetChecked(not IsFriendHidden(friend.key))
 		check:Show()
 	end
 	for index = #friends + 1, #settingsPanel.friendChecks do
 		settingsPanel.friendChecks[index]:Hide()
+		settingsPanel.friendChecks[index].edit:Hide()
 	end
 	settingsPanel.emptyText:SetShown(#friends == 0)
 	settingsPanel.content:SetHeight(-FRIEND_LIST_TOP + math.max(1, #friends) * SETTINGS_ROW_HEIGHT + 8)

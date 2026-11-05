@@ -407,21 +407,6 @@ end
 -- Friend scan
 ---------------------------------------------------------------------------
 
--- Real names stay on this machine: they are never sent to other friends.
-local function RememberRealName(account)
-	local name = account.accountName
-	if type(name) ~= "string" or name == "" then
-		return
-	end
-	if name:find("|K", 1, true) and BNTokenFindName then
-		name = BNTokenFindName(name) -- resolve the escaped name so it can be stored
-	end
-	local names = FriendInfoTrackerSettings.realNames
-	if name and name ~= "" and name ~= account.battleTag and name ~= account.battleTag:match("^([^#]+)") then
-		names[account.battleTag] = name
-	end
-end
-
 local function ScanFriends()
 	scanPending = false
 	if not FriendInfoTrackerDB or not BNConnected() then
@@ -433,7 +418,6 @@ local function ScanFriends()
 	for friendIndex = 1, BNGetNumFriends() do
 		local account = C_BattleNet.GetFriendAccountInfo(friendIndex)
 		if account and account.battleTag then
-			RememberRealName(account)
 			for gameIndex = 1, C_BattleNet.GetFriendNumGameAccounts(friendIndex) or 0 do
 				local game = C_BattleNet.GetFriendGameAccountInfo(friendIndex, gameIndex)
 				if game and game.isOnline and game.gameAccountID
