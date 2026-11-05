@@ -78,6 +78,13 @@ local function Gray(text)
 	return "|cff808080" .. text .. "|r"
 end
 
+-- "Name (Real Name)" for friends whose Battle.net real name is known.
+local function FriendTitle(battleTag)
+	local title = Safe(ShortTag(battleTag))
+	local realName = FriendInfoTrackerSettings.realNames[battleTag]
+	return realName and (title .. " " .. Gray("(" .. Safe(realName) .. ")")) or title
+end
+
 local function LastUpdated(record)
 	local latest
 	for _, section in ipairs(addon.SECTIONS) do
@@ -612,7 +619,7 @@ local function BuildEntries()
 	local function AddGroup(group, dimmed)
 		entries[#entries + 1] = {
 			kind = "group",
-			title = group.isMine and "Your characters" or Safe(ShortTag(group.key)),
+			title = group.isMine and "Your characters" or FriendTitle(group.key),
 			key = group.key,
 			isMine = group.isMine,
 			hidden = group.hidden,
@@ -854,7 +861,7 @@ function addon.RefreshSettings()
 			settingsPanel.friendChecks[index] = check
 		end
 		check.friendKey = friend.key
-		check.label:SetText(Safe(ShortTag(friend.key)) .. " " .. Gray("(" .. friend.count .. (friend.count == 1 and " character)" or " characters)")))
+		check.label:SetText(FriendTitle(friend.key) .. " " .. Gray("(" .. friend.count .. (friend.count == 1 and " character)" or " characters)")))
 		check:SetChecked(not IsFriendHidden(friend.key))
 		check:Show()
 	end

@@ -1,0 +1,25 @@
+name: Package and release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CF_API_KEY: ${{ secrets.CF_API_KEY }}
+      GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # The addon lives in a subfolder, so stage the changelog next to its .toc.
+      - run: cp CHANGELOG.md FriendInfoTracker/CHANGELOG.md
+      - uses: BigWigsMods/packager@v2
+        with:
+          args: -t FriendInfoTracker

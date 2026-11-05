@@ -91,6 +91,7 @@ local function InitDB()
 	-- stays pure character data.
 	FriendInfoTrackerSettings = FriendInfoTrackerSettings or {}
 	FriendInfoTrackerSettings.hiddenFriends = FriendInfoTrackerSettings.hiddenFriends or {}
+	FriendInfoTrackerSettings.realNames = FriendInfoTrackerSettings.realNames or {}
 end
 
 local function GetCharacterRecord()
