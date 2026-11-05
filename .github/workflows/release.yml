@@ -16,10 +16,19 @@ jobs:
       GITHUB_OAUTH: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      # The addon lives in a subfolder, so stage the changelog next to its .toc.
-      - run: cp CHANGELOG.md FriendInfoTracker/CHANGELOG.md
+      # The packager needs the addon at the root of a git checkout, but it
+      # lives in a subfolder here. Stage it as its own throwaway repo.
+      - name: Stage addon as a checkout
+        run: |
+          mkdir ../stage
+          cp -r FriendInfoTracker/. ../stage/
+          cp CHANGELOG.md ../stage/CHANGELOG.md
+          cd ../stage
+          git init -q
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          git -c user.name=ci -c user.email=ci@example.com add -A
+          git -c user.name=ci -c user.email=ci@example.com commit -qm "$GITHUB_REF_NAME"
+          git tag "$GITHUB_REF_NAME"
       - uses: BigWigsMods/packager@v2
         with:
-          args: -t FriendInfoTracker
+          args: -t ../stage
