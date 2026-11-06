@@ -19,6 +19,16 @@ local COLUMNS = {
 	{ key = "updated", label = "Updated", x = 654, width = 54 },
 }
 
+-- The window is resizable; extra width beyond FRAME_WIDTH is shared between the
+-- growing columns, so the base geometry is kept alongside the live values.
+local MIN_WIDTH, MIN_HEIGHT = FRAME_WIDTH, 300
+local MAX_WIDTH, MAX_HEIGHT = 1500, 1000
+local rowWidth = ROW_WIDTH
+for _, column in ipairs(COLUMNS) do
+	column.baseX, column.baseWidth = column.x, column.width
+	column.grow = column.key == "zone" or column.key == "primary" or column.key == "secondary"
+end
+
 local SETTINGS_ROW_HEIGHT = 50
 
 local frame, recipePanel, settingsPanel
@@ -76,6 +86,7 @@ local function RelativeTime(epoch)
 		return math.floor(diff / 86400) .. "d ago"
 	end
 end
+addon.RelativeTime = RelativeTime
 
 -- Escapes UI markup in strings that may have come from other players.
 local function Safe(text)
@@ -196,8 +207,9 @@ end
 
 local function CreateRecipePanel(parent)
 	local panel = CreateFrame("Frame", "FriendInfoTrackerRecipes", parent, "BasicFrameTemplateWithInset")
-	panel:SetSize(RECIPE_PANEL_WIDTH, FRAME_HEIGHT)
+	panel:SetWidth(RECIPE_PANEL_WIDTH)
 	panel:SetPoint("TOPLEFT", parent, "TOPRIGHT", -2, 0)
+	panel:SetPoint("BOTTOMLEFT", parent, "BOTTOMRIGHT", -2, 0)
 
 	panel.title = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	panel.title:SetPoint("TOP", panel, "TOP", 0, -6)
@@ -465,11 +477,54 @@ local function ShowRowTooltip(row)
 	GameTooltip:Show()
 end
 
+-- Repositions the column headers and every row's cells for the current width.
+local function ApplyLayout(f)
+	local share = math.max(0, f:GetWidth() - FRAME_WIDTH) / 3
+	local shift = 0
+	for _, column in ipairs(COLUMNS) do
+		column.x = column.baseX + shift
+		column.width = column.baseWidth + (column.grow and share or 0)
+		if column.grow then
+			shift = shift + share
+		end
+	end
+	rowWidth = ROW_WIDTH + share * 3
+
+	for _, column in ipairs(COLUMNS) do
+		local label = f.headerLabels[column.key]
+		label:SetPoint("TOPLEFT", f, "TOPLEFT", 12 + column.x, -34)
+		label:SetWidth(column.width)
+	end
+	f.scrollChild:SetWidth(rowWidth)
+	for _, row in ipairs(f.rows) do
+		row:SetWidth(rowWidth)
+		for _, column in ipairs(COLUMNS) do
+			local cell = row.cells[column.key]
+			cell:SetPoint("TOPLEFT", row, "TOPLEFT", column.x, -ROW_PADDING / 2)
+			cell:SetWidth(column.width)
+		end
+	end
+end
+
+local function Clamp(value, low, high)
+	return math.max(low, math.min(high, value))
+end
+
 local function CreateMainFrame()
 	local f = CreateFrame("Frame", "FriendInfoTrackerFrame", UIParent, "BasicFrameTemplateWithInset")
-	f:SetSize(FRAME_WIDTH, FRAME_HEIGHT)
+	local saved = FriendInfoTrackerSettings.windowSize
+	f:SetSize(
+		saved and Clamp(saved.width or 0, MIN_WIDTH, MAX_WIDTH) or FRAME_WIDTH,
+		saved and Clamp(saved.height or 0, MIN_HEIGHT, MAX_HEIGHT) or FRAME_HEIGHT)
 	f:SetPoint("CENTER")
 	f:SetMovable(true)
+	f:SetResizable(true)
+	if f.SetResizeBounds then
+		f:SetResizeBounds(MIN_WIDTH, MIN_HEIGHT, MAX_WIDTH, MAX_HEIGHT)
+	else
+		f:SetMinResize(MIN_WIDTH, MIN_HEIGHT)
+		f:SetMaxResize(MAX_WIDTH, MAX_HEIGHT)
+	end
 	f:EnableMouse(true)
 	f:RegisterForDrag("LeftButton")
 	f:SetScript("OnDragStart", f.StartMoving)
@@ -482,12 +537,14 @@ local function CreateMainFrame()
 	f.title:SetText("FriendInfoTracker")
 
 	-- Column headers
+	f.headerLabels = {}
 	for _, column in ipairs(COLUMNS) do
 		local label = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 		label:SetPoint("TOPLEFT", f, "TOPLEFT", 12 + column.x, -34)
 		label:SetWidth(column.width)
 		label:SetJustifyH(column.justify or "LEFT")
 		label:SetText(column.label)
+		f.headerLabels[column.key] = label
 	end
 	local divider = f:CreateTexture(nil, "ARTWORK")
 	divider:SetColorTexture(1, 0.82, 0, 0.25)
@@ -500,7 +557,7 @@ local function CreateMainFrame()
 	scrollFrame:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -32, 38)
 
 	local scrollChild = CreateFrame("Frame", nil, scrollFrame)
-	scrollChild:SetSize(ROW_WIDTH, 1)
+	scrollChild:SetSize(rowWidth, 1)
 
 	local settingsButton = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
 	settingsButton:SetSize(90, 22)
@@ -513,6 +570,26 @@ local function CreateMainFrame()
 
 	f.scrollChild = scrollChild
 	f.rows = {}
+
+	-- Drag the bottom-right corner to resize; the size is remembered.
+	local grip = CreateFrame("Button", nil, f)
+	grip:SetSize(16, 16)
+	grip:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -4, 4)
+	grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+	grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+	grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+	grip:SetScript("OnMouseDown", function()
+		f:StartSizing("BOTTOMRIGHT")
+	end)
+	grip:SetScript("OnMouseUp", function()
+		f:StopMovingOrSizing()
+		FriendInfoTrackerSettings.windowSize = { width = f:GetWidth(), height = f:GetHeight() }
+		addon.RefreshFrame()
+	end)
+	f:SetScript("OnSizeChanged", function(self)
+		ApplyLayout(self)
+	end)
+	ApplyLayout(f)
 
 	-- Closing the main window also closes the fold-out panels, so they don't
 	-- reappear with stale content next time.
@@ -546,7 +623,7 @@ local function GetOrCreateRow(parent, index)
 	end
 
 	row = CreateFrame("Button", nil, parent.scrollChild)
-	row:SetWidth(ROW_WIDTH)
+	row:SetWidth(rowWidth)
 	row:SetScript("OnEnter", ShowRowTooltip)
 	row:SetScript("OnLeave", GameTooltip_Hide)
 	row:SetScript("OnClick", function(self)
@@ -800,8 +877,9 @@ local FRIEND_LIST_TOP = -108
 
 local function CreateSettingsPanel(parent)
 	local panel = CreateFrame("Frame", "FriendInfoTrackerSettingsPanel", parent, "BasicFrameTemplateWithInset")
-	panel:SetSize(RECIPE_PANEL_WIDTH, FRAME_HEIGHT)
+	panel:SetWidth(RECIPE_PANEL_WIDTH)
 	panel:SetPoint("TOPLEFT", parent, "TOPRIGHT", -2, 0)
+	panel:SetPoint("BOTTOMLEFT", parent, "BOTTOMRIGHT", -2, 0)
 
 	panel.title = panel:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
 	panel.title:SetPoint("TOP", panel, "TOP", 0, -6)
@@ -952,11 +1030,41 @@ function addon.ToggleSettings()
 	addon.RefreshSettings()
 end
 
+-- Prints every stored record whose id matches, to debug duplicate or odd rows.
+local function DumpCharacters(query)
+	query = strtrim(query or ""):lower()
+	if query == "" then
+		print("|cff33ff99FriendInfoTracker:|r usage: /fit dump <character name>")
+		return
+	end
+	local found = 0
+	for id, record in pairs(FriendInfoTrackerDB.characters) do
+		local identity = record.identity
+		if id:lower():find(query, 1, true) or (identity and identity.name and identity.name:lower():find(query, 1, true)) then
+			found = found + 1
+			print(string.format("|cff33ff99%s|r  owner=%s  receivedFrom=%s%s", id, tostring(record.owner),
+				tostring(record.receivedFrom), record.isMine and "  (mine)" or ""))
+			print(string.format("    identity: %s", identity and string.format("name=%s realm=%s region=%s class=%s",
+				tostring(identity.name), tostring(identity.realm), tostring(identity.region), tostring(identity.class)) or "none"))
+			for _, section in ipairs(addon.SECTIONS) do
+				local data = record[section]
+				if data then
+					print(string.format("    %s: %s (%s)", section, RelativeTime(data.updatedAt), tostring(data.source)))
+				end
+			end
+		end
+	end
+	if found == 0 then
+		print("|cff33ff99FriendInfoTracker:|r no records match '" .. query .. "'")
+	end
+end
+
 local function PrintHelp()
 	print("|cff33ff99FriendInfoTracker:|r commands")
 	print("  /fit - toggle the window")
 	print("  /fit sync - re-sync with online friends now")
-	print("  /fit status - list online friends running the addon")
+	print("  /fit status - friends running the addon and when each last synced")
+	print("  /fit dump <name> - show stored records for a character")
 	print("  /fit settings - open the settings panel")
 	print("  /fit minimap - show/hide the minimap button")
 end
@@ -964,13 +1072,17 @@ end
 SLASH_FRIENDINFOTRACKER1 = "/fit"
 SLASH_FRIENDINFOTRACKER2 = "/friendinfotracker"
 SlashCmdList["FRIENDINFOTRACKER"] = function(input)
-	local command = strtrim(input or ""):lower()
+	local text = strtrim(input or "")
+	local command, argument = text:match("^(%S*)%s*(.-)$")
+	command = command:lower()
 	if command == "" then
 		ToggleUI()
 	elseif command == "sync" then
 		addon.ForceSync()
 	elseif command == "status" then
 		addon.PrintStatus()
+	elseif command == "dump" then
+		DumpCharacters(argument)
 	elseif command == "settings" then
 		addon.ToggleSettings()
 	elseif command == "minimap" then

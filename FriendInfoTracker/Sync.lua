@@ -22,7 +22,8 @@ local SEND_INTERVAL = 0.3 -- seconds between queued messages
 local SCAN_INTERVAL = 60 -- seconds between friend-list scans
 local SCAN_DEBOUNCE = 3
 local PING_GRACE = 30 -- seconds to wait for a PONG before falling back to the friend list
-local FLUSH_DELAY = 30 -- debounce before pushing changed records to peers
+local FLUSH_DELAY = 5 -- debounce before pushing changed records to peers
+local LOGOUT_MAX_MESSAGES = 20 -- cap on messages sent directly while logging out
 local BNET_REFRESH_SECONDS = 30 * 60 -- passive capture rewrites unchanged data at most this often
 local REASSEMBLY_TIMEOUT = 120
 local MAX_CHUNKS = 200
@@ -43,6 +44,7 @@ local sendQueue = {}
 local nextMessageID = 0
 local sending = false
 local flushPending = false
+local directBudget = 0 -- messages that may still be sent directly (logout flush)
 local scanPending = false
 
 ---------------------------------------------------------------------------
@@ -82,15 +84,23 @@ local function PumpQueue()
 	C_Timer.After(SEND_INTERVAL, PumpQueue)
 end
 
-local function Send(target, msgType, payload)
+-- immediate sends skip the timed queue (timers don't run once logout starts),
+-- up to directBudget messages; anything beyond that falls back to the queue.
+local function Send(target, msgType, payload, immediate)
 	local body = payload and addon.Serialize(payload) or ""
 	nextMessageID = (nextMessageID % 1000000) + 1
 	local chunks = SplitChunks(body)
 	for seq, chunk in ipairs(chunks) do
 		local header = table.concat({ PROTOCOL, msgType, nextMessageID, seq, #chunks }, ":")
-		sendQueue[#sendQueue + 1] = { target = target, text = header .. ":" .. chunk }
+		local text = header .. ":" .. chunk
+		if immediate and directBudget > 0 then
+			directBudget = directBudget - 1
+			pcall(BNSendGameData, target, PREFIX, text)
+		else
+			sendQueue[#sendQueue + 1] = { target = target, text = text }
+		end
 	end
-	if not sending then
+	if #sendQueue > 0 and not sending then
 		sending = true
 		PumpQueue()
 	end
@@ -273,12 +283,12 @@ end
 
 -- Sends records as one or more DATA messages of roughly DATA_BATCH_BYTES each,
 -- so a large sync never becomes a single oversized message.
-local function SendRecords(target, records)
+local function SendRecords(target, records, immediate)
 	local batch, batchBytes, any = {}, 0, false
 	for id, record in pairs(records) do
 		local bytes = #addon.Serialize(record) + #id
 		if any and batchBytes + bytes > DATA_BATCH_BYTES then
-			Send(target, "DATA", batch)
+			Send(target, "DATA", batch, immediate)
 			batch, batchBytes = {}, 0
 		end
 		batch[id] = record
@@ -286,12 +296,13 @@ local function SendRecords(target, records)
 		any = true
 	end
 	if any then
-		Send(target, "DATA", batch)
+		Send(target, "DATA", batch, immediate)
 	end
 end
 
-local function Flush()
+local function Flush(immediate)
 	flushPending = false
+	directBudget = immediate and LOGOUT_MAX_MESSAGES or 0
 	local characters = FriendInfoTrackerDB.characters
 	for target in pairs(peers) do
 		local payload, any = {}, false
@@ -303,7 +314,7 @@ local function Flush()
 			end
 		end
 		if any then
-			SendRecords(target, payload)
+			SendRecords(target, payload, immediate)
 		end
 	end
 	-- With no peers online, nothing is lost: the next digest exchange catches up.
@@ -321,7 +332,16 @@ function addon.MarkDirty(id, skipTarget)
 	end
 	if not flushPending then
 		flushPending = true
-		C_Timer.After(FLUSH_DELAY, Flush)
+		C_Timer.After(FLUSH_DELAY, function()
+			Flush()
+		end)
+	end
+end
+
+-- Pushes pending changes right away (logout/reload), bypassing the send timer.
+function addon.FlushNow()
+	if next(dirty) then
+		Flush(true)
 	end
 end
 
@@ -501,6 +521,11 @@ local function EnsurePeer(senderID)
 	end
 	peer.battleTag = onlineWoW[senderID] or peer.battleTag
 	peer.lastSeen = time()
+	if peer.battleTag then
+		local log = FriendInfoTrackerSettings.syncLog
+		log[peer.battleTag] = log[peer.battleTag] or {}
+		log[peer.battleTag].heard = peer.lastSeen
+	end
 	return peer
 end
 
@@ -561,6 +586,9 @@ local function HandleMessage(senderID, msgType, body)
 			return
 		end
 		local now, count, changed = time(), 0, false
+		if peer.battleTag then
+			FriendInfoTrackerSettings.syncLog[peer.battleTag].data = now
+		end
 		for id, incoming in pairs(records) do
 			count = count + 1
 			if count > MAX_RECORDS_PER_MESSAGE then
@@ -626,17 +654,32 @@ function addon.ForceSync()
 end
 
 function addon.PrintStatus()
-	local names = {}
-	for _, peer in pairs(peers) do
-		names[#names + 1] = peer.battleTag or "?"
-	end
-	table.sort(names)
 	local online = 0
 	for _ in pairs(onlineWoW) do
 		online = online + 1
 	end
-	print(string.format("|cff33ff99FriendInfoTracker:|r %d friend(s) in WoW, %d running the addon%s",
-		online, #names, #names > 0 and (": " .. table.concat(names, ", ")) or ""))
+	local running = {}
+	for _, peer in pairs(peers) do
+		if peer.battleTag then
+			running[peer.battleTag] = true
+		end
+	end
+	local runningCount = 0
+	for _ in pairs(running) do
+		runningCount = runningCount + 1
+	end
+	print(string.format("|cff33ff99FriendInfoTracker:|r %d friend(s) in WoW, %d running the addon", online, runningCount))
+
+	-- Last time each friend's addon was heard from, and last time it sent data.
+	local log, tags = FriendInfoTrackerSettings.syncLog, {}
+	for tag in pairs(log) do
+		tags[#tags + 1] = tag
+	end
+	table.sort(tags)
+	for _, tag in ipairs(tags) do
+		print(string.format("  %s%s: last heard %s, last data %s", tag, running[tag] and " (online)" or "",
+			addon.RelativeTime(log[tag].heard), addon.RelativeTime(log[tag].data)))
+	end
 end
 
 ---------------------------------------------------------------------------

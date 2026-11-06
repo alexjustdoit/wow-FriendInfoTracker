@@ -5,6 +5,14 @@ All notable changes to FriendInfoTracker. Releases are on the
 
 ## [0.7.2] - 2026-11-06
 
+### Added
+- The main window can be resized by dragging the bottom-right corner; the size is remembered.
+- `/fit status` now shows, per friend, when their addon was last heard from and when it last sent data.
+- `/fit dump <name>` prints the stored records for a character (id, owner, sources) to help debug duplicates.
+
+### Changed
+- Changes are pushed to friends after 5 seconds instead of 30, and pending changes are sent on logout and `/reload`.
+
 ### Fixed
 - Characters belonging to friends-of-friends (relayed through your friends) no longer appear; only your own and your Battle.net friends' characters are listed.
 - Characters sent without an owner BattleTag (shown under "?") are no longer accepted or sent. The addon now stamps your characters with your BattleTag as soon as Battle.net connects.

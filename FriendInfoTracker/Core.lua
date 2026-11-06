@@ -95,6 +95,8 @@ local function InitDB()
 	FriendInfoTrackerSettings.friendNames = FriendInfoTrackerSettings.friendNames or {}
 	-- BattleTags of this account's Battle.net friends, refreshed by each scan.
 	FriendInfoTrackerSettings.friendTags = FriendInfoTrackerSettings.friendTags or {}
+	-- [BattleTag] = { heard = epoch, data = epoch }: when each friend's addon last talked to us.
+	FriendInfoTrackerSettings.syncLog = FriendInfoTrackerSettings.syncLog or {}
 end
 
 local function GetCharacterRecord()
@@ -423,5 +425,9 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1)
 			addonVersion = GetAddonVersion(),
 			lastLogout = time(),
 		}
+		-- Push any pending changes before the connection goes away.
+		if addon.FlushNow then
+			pcall(addon.FlushNow)
+		end
 	end
 end)
