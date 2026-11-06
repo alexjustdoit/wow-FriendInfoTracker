@@ -3,6 +3,12 @@
 All notable changes to FriendInfoTracker. Releases are on the
 [GitHub releases page](https://github.com/alexjustdoit/wow-FriendInfoTracker/releases).
 
+## [0.7.2] - 2026-11-06
+
+### Fixed
+- Characters belonging to friends-of-friends (relayed through your friends) no longer appear; only your own and your Battle.net friends' characters are listed.
+- Characters sent without an owner BattleTag (shown under "?") are no longer accepted or sent. The addon now stamps your characters with your BattleTag as soon as Battle.net connects.
+
 ## [0.7.1] - 2026-11-05
 
 ### Changed

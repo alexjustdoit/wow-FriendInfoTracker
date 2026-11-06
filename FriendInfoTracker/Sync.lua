@@ -296,7 +296,8 @@ local function Flush()
 	for target in pairs(peers) do
 		local payload, any = {}, false
 		for id, skipTarget in pairs(dirty) do
-			if skipTarget ~= target and characters[id] then
+			-- Never send a record without an owner; receivers can't place it.
+			if skipTarget ~= target and characters[id] and characters[id].owner then
 				payload[id] = ExportRecord(characters[id])
 				any = true
 			end
@@ -415,9 +416,11 @@ local function ScanFriends()
 
 	wipe(onlineWoW)
 	local games = {}
+	local friendTags = {}
 	for friendIndex = 1, BNGetNumFriends() do
 		local account = C_BattleNet.GetFriendAccountInfo(friendIndex)
 		if account and account.battleTag then
+			friendTags[account.battleTag] = true
 			for gameIndex = 1, C_BattleNet.GetFriendNumGameAccounts(friendIndex) or 0 do
 				local game = C_BattleNet.GetFriendGameAccountInfo(friendIndex, gameIndex)
 				if game and game.isOnline and game.gameAccountID
@@ -429,6 +432,11 @@ local function ScanFriends()
 				end
 			end
 		end
+	end
+
+	-- Only trust a non-empty list; the friend list can still be loading.
+	if next(friendTags) then
+		FriendInfoTrackerSettings.friendTags = friendTags
 	end
 
 	for id in pairs(peers) do
@@ -521,7 +529,7 @@ local function RecordsNewerThan(digest)
 		local theirs = type(digest[id]) == "table" and digest[id] or {}
 		for index, section in ipairs(SECTIONS) do
 			local ours = (record[section] and record[section].updatedAt) or 0
-			if ours > (tonumber(theirs[index]) or 0) then
+			if record.owner and ours > (tonumber(theirs[index]) or 0) then
 				payload[id] = ExportRecord(record)
 				any = true
 				break
@@ -559,7 +567,7 @@ local function HandleMessage(senderID, msgType, body)
 				break
 			end
 			local clean = SanitizeRecord(id, incoming, now)
-			if clean and MergeRecord(id, clean, peer.battleTag) then
+			if clean and clean.owner and MergeRecord(id, clean, peer.battleTag) then
 				addon.MarkDirty(id, senderID)
 				changed = true
 			end

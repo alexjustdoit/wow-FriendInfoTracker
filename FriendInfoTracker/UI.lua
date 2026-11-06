@@ -26,6 +26,20 @@ local selectedID
 local hiddenExpanded = false -- the Hidden section starts collapsed each session
 
 -- Friends are hidden by BattleTag (account-wide setting).
+-- Characters are listed only if they're ours or their owner is currently one of
+-- our Battle.net friends. Relayed records can belong to friends-of-friends or
+-- carry no owner at all. The data is kept, just not shown.
+local function IsListed(record, isMine)
+	if isMine then
+		return true
+	end
+	if not record.owner then
+		return false
+	end
+	local friendTags = FriendInfoTrackerSettings.friendTags
+	return next(friendTags) == nil or friendTags[record.owner] == true
+end
+
 local function IsFriendHidden(battleTag)
 	return FriendInfoTrackerSettings.hiddenFriends[battleTag] == true
 end
@@ -605,11 +619,13 @@ local function BuildEntries()
 	for id, record in pairs(FriendInfoTrackerDB.characters) do
 		local isMine = (record.isMine or (myTag ~= nil and record.owner == myTag)) and true or false
 		local key = isMine and "" or (record.owner or "?")
-		if not groups[key] then
-			groups[key] = { key = key, isMine = isMine, hidden = not isMine and IsFriendHidden(key), characters = {} }
-			order[#order + 1] = groups[key]
+		if IsListed(record, isMine) then
+			if not groups[key] then
+				groups[key] = { key = key, isMine = isMine, hidden = not isMine and IsFriendHidden(key), characters = {} }
+				order[#order + 1] = groups[key]
+			end
+			table.insert(groups[key].characters, { kind = "character", id = id, record = record, updatedAt = LastUpdated(record) or 0 })
 		end
-		table.insert(groups[key].characters, { kind = "character", id = id, record = record, updatedAt = LastUpdated(record) or 0 })
 	end
 
 	table.sort(order, function(a, b)
@@ -832,8 +848,8 @@ local function KnownFriends()
 	local counts = {}
 	for _, record in pairs(FriendInfoTrackerDB.characters) do
 		local isMine = record.isMine or (myTag ~= nil and record.owner == myTag)
-		if not isMine then
-			local key = record.owner or "?"
+		if not isMine and IsListed(record, false) then
+			local key = record.owner
 			counts[key] = (counts[key] or 0) + 1
 		end
 	end

@@ -93,6 +93,8 @@ local function InitDB()
 	FriendInfoTrackerSettings.hiddenFriends = FriendInfoTrackerSettings.hiddenFriends or {}
 	FriendInfoTrackerSettings.realNames = nil -- auto-captured names were unreadable ids
 	FriendInfoTrackerSettings.friendNames = FriendInfoTrackerSettings.friendNames or {}
+	-- BattleTags of this account's Battle.net friends, refreshed by each scan.
+	FriendInfoTrackerSettings.friendTags = FriendInfoTrackerSettings.friendTags or {}
 end
 
 local function GetCharacterRecord()
@@ -376,7 +378,7 @@ for _, event in ipairs({
 	"ADDON_LOADED", "PLAYER_LOGIN", "PLAYER_LEVEL_UP", "SKILL_LINES_CHANGED",
 	"TRADE_SKILL_SHOW", "TRADE_SKILL_UPDATE", "TRADE_SKILL_LIST_UPDATE", "NEW_RECIPE_LEARNED",
 	"CRAFT_SHOW", "CRAFT_UPDATE",
-	"ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "PLAYER_LOGOUT",
+	"ZONE_CHANGED_NEW_AREA", "ZONE_CHANGED", "PLAYER_LOGOUT", "BN_CONNECTED",
 }) do
 	pcall(eventFrame.RegisterEvent, eventFrame, event)
 end
@@ -388,6 +390,18 @@ eventFrame:SetScript("OnEvent", function(_, event, arg1)
 		end
 	elseif event == "PLAYER_LOGIN" then
 		CaptureAll()
+	elseif event == "BN_CONNECTED" then
+		-- The BattleTag may not have been known at login; re-stamp our characters
+		-- so they can be sent to friends.
+		local tag = GetMyBattleTag()
+		if tag then
+			for id, record in pairs(FriendInfoTrackerDB.characters) do
+				if record.isMine and not record.owner then
+					record.owner = tag
+					OnRecordChanged(id)
+				end
+			end
+		end
 	elseif event == "PLAYER_LEVEL_UP" then
 		-- UnitLevel() can still report the old level while this event fires.
 		CaptureLevel(arg1)
