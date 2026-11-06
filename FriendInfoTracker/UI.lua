@@ -11,7 +11,7 @@ local STALE_AFTER_SECONDS = 7 * 86400
 
 -- Column layout shared by the column headers and every character row.
 local COLUMNS = {
-	{ key = "name", label = "Character", x = 6, width = 130 },
+	{ key = "name", label = "Character", x = 6, width = 112 },
 	{ key = "level", label = "Level", x = 140, width = 40, justify = "CENTER" },
 	{ key = "zone", label = "Zone", x = 186, width = 150 },
 	{ key = "primary", label = "Primary", x = 342, width = 150 },
@@ -510,6 +510,40 @@ local function Clamp(value, low, high)
 	return math.max(low, math.min(high, value))
 end
 
+-- Addons can't write to the clipboard, so show the name pre-selected in a
+-- popup: Ctrl+C copies it, Esc closes.
+StaticPopupDialogs["FRIENDINFOTRACKER_COPY_NAME"] = {
+	text = "Press Ctrl+C to copy, then Esc.",
+	button1 = CLOSE,
+	hasEditBox = true,
+	editBoxWidth = 260,
+	timeout = 0,
+	whileDead = true,
+	hideOnEscape = true,
+	preferredIndex = 3,
+	OnShow = function(self, data)
+		local editBox = self.editBox or self.EditBox
+		editBox:SetText(data or "")
+		editBox:HighlightText()
+		editBox:SetFocus()
+	end,
+	EditBoxOnEnterPressed = function(self)
+		self:GetParent():Hide()
+	end,
+	EditBoxOnEscapePressed = function(self)
+		self:GetParent():Hide()
+	end,
+}
+
+-- "Name-Realm", the form the mail "To:" field accepts for any realm.
+local function FullCharacterName(entry)
+	local identity = entry.record.identity or {}
+	if identity.name and identity.realm then
+		return identity.name .. "-" .. identity.realm
+	end
+	return (entry.id:match("^(.+%-.+)%-%u%u$")) or entry.id
+end
+
 local function CreateMainFrame()
 	local f = CreateFrame("Frame", "FriendInfoTrackerFrame", UIParent, "BasicFrameTemplateWithInset")
 	local saved = FriendInfoTrackerSettings.windowSize
@@ -672,6 +706,25 @@ local function GetOrCreateRow(parent, index)
 			or "GameFontHighlightSmall"
 		row.cells[column.key] = CreateCell(row, column, template)
 	end
+	row.copy = CreateFrame("Button", nil, row)
+	row.copy:SetSize(14, 14)
+	row.copy:SetPoint("TOPLEFT", row, "TOPLEFT", COLUMNS[1].x + COLUMNS[1].width + 2, -ROW_PADDING / 2)
+	row.copy:SetNormalTexture("Interface\\Icons\\INV_Misc_Note_01")
+	row.copy:SetHighlightTexture("Interface\\Buttons\\ButtonHilight-Square", "ADD")
+	row.copy:SetScript("OnClick", function(self)
+		local entry = self:GetParent().entry
+		if entry and entry.kind == "character" then
+			StaticPopup_Show("FRIENDINFOTRACKER_COPY_NAME", nil, nil, FullCharacterName(entry))
+		end
+	end)
+	row.copy:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:AddLine("Copy full name")
+		GameTooltip:AddLine("Paste it into the mail To: field.", 0.7, 0.7, 0.7)
+		GameTooltip:Show()
+	end)
+	row.copy:SetScript("OnLeave", GameTooltip_Hide)
+
 	row.cells.primary:SetWordWrap(true)
 	row.cells.secondary:SetWordWrap(true)
 	row.cells.primary:SetSpacing(LINE_HEIGHT - 12)
@@ -776,6 +829,7 @@ local function ShowCharacterRow(row, entry, currentID)
 		row.bg:Hide()
 	end
 
+	row.copy:Show()
 	row.arrow:SetShown(#RecipeLists(record) > 0)
 	local isStale = entry.updatedAt > 0 and (time() - entry.updatedAt) > STALE_AFTER_SECONDS
 	row:SetAlpha((isStale or entry.dimmed) and 0.5 or 1)
@@ -785,6 +839,7 @@ local function ShowHeaderRow(row, entry)
 	row:SetHeight(HEADER_ROW_HEIGHT)
 	row.bg:Hide()
 	row.arrow:Hide()
+	row.copy:Hide()
 	row.header:ClearAllPoints()
 
 	if entry.kind == "hiddenHeader" then
