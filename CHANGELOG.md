@@ -3,7 +3,7 @@
 All notable changes to FriendInfoTracker. Releases are on the
 [GitHub releases page](https://github.com/alexjustdoit/wow-FriendInfoTracker/releases).
 
-## [Unreleased]
+## [0.7.3] - 2026-11-06
 
 ### Added
 - A copy button next to each character name opens a popup with the full `Name-Realm` pre-selected for Ctrl+C, for pasting into the mail "To:" field (#2).
