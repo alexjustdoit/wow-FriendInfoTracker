@@ -124,6 +124,9 @@ local function newClient(spec)
 	env.WOW_PROJECT_ID = 1
 	env.BNConnected = function() return true end
 	env.SlashCmdList = {}
+	env.StaticPopupDialogs = {}
+	env.StaticPopup_Show = function() end
+	env.CLOSE = "Close"
 	env.Minimap = { GetWidth = function() return 140 end }
 
 	local function onlineFriends()
@@ -245,6 +248,7 @@ local Senv = C.env
 local evil = Senv.FriendInfoTracker.Serialize({
 	["Cara-Stormrage-US"] = { owner = "Mallory#9", level = { value = 1, updatedAt = clock + 10, source = "addon" } },
 	["Fake-Realm-US"] = {
+		owner = "Mallory#9",
 		identity = { name = "Other", realm = "Realm", region = "US", updatedAt = clock },
 		level = { value = 5, updatedAt = clock + 99999999, source = "addon" },
 		location = { zone = "|cffff0000red|r", updatedAt = clock },
@@ -580,6 +584,40 @@ local ok2, err2 = pcall(function()
 	assert(not panel:IsShown(), "closing main window closes settings")
 end)
 check("hidden friends + settings panel" .. (ok2 and "" or (": " .. tostring(err2))), ok2)
+
+-- 14. Junk, own-account and duplicate records are rejected and cleaned up
+do
+	local send = function(owner, id, extra)
+		local rec = { owner = owner, identity = { name = id:match("^(.-)%-"), realm = "Stormrage", region = "US", updatedAt = clock, source = "bnet", guid = extra and extra.guid },
+			level = { value = 20, updatedAt = clock, source = "bnet" } }
+		fire(C, "BN_CHAT_MSG_ADDON", "FIT", "2:DATA:" .. math.random(2000, 9000) .. ":1:1:" .. C.env.FriendInfoTracker.Serialize({ [id] = rec }), "WHISPER", 22)
+	end
+	local myTag = "Cara#3333"
+	send("", "NoOwner-Stormrage-US")
+	send(myTag, "Xena-Stormrage-US")
+	send("Bob#2222", "Bobb Cucumber-Stormrage-US") -- friend-list copy for a friend whose addon reports
+	check("empty owner rejected", db(C)["NoOwner-Stormrage-US"] == nil)
+	check("record owned by our own account rejected", db(C)["Xena-Stormrage-US"] == nil)
+	check("passive copy for an addon-reporting friend rejected", db(C)["Bobb Cucumber-Stormrage-US"] == nil)
+
+	-- Junk already in the database is purged on the next scan
+	db(C)["Stale-Stormrage-US"] = { owner = "", level = { value = 1, updatedAt = clock - 100, source = "bnet" } }
+	db(C)["Mine2-Stormrage-US"] = { owner = myTag, level = { value = 1, updatedAt = clock - 100, source = "bnet" } }
+	db(C)["Cucumber-Stormrage-US"] = { owner = "Bob#2222", level = { value = 1, updatedAt = clock - 100, source = "bnet" } }
+	fire(C, "BN_FRIEND_INFO_CHANGED")
+	advance(70)
+	check("ownerless record purged", db(C)["Stale-Stormrage-US"] == nil)
+	check("own-account non-mine record purged", db(C)["Mine2-Stormrage-US"] == nil)
+	check("stale passive copy for addon owner purged", db(C)["Cucumber-Stormrage-US"] == nil)
+	check("real records survive cleanup", db(C)[bobID] ~= nil and db(C)["Cara-Stormrage-US"] ~= nil)
+
+	-- Same owner + same GUID (a renamed or re-spelled character) keeps only the newer record
+	db(C)["Old-Stormrage-US"] = { owner = "Dan#4444", identity = { name = "Old", realm = "Stormrage", region = "US", guid = "Player-9", source = "bnet" }, level = { value = 5, updatedAt = clock - 500, source = "bnet" } }
+	db(C)["New-Stormrage-US"] = { owner = "Dan#4444", identity = { name = "New", realm = "Stormrage", region = "US", guid = "Player-9", source = "bnet" }, level = { value = 6, updatedAt = clock - 5, source = "bnet" } }
+	fire(C, "BN_FRIEND_INFO_CHANGED")
+	advance(70)
+	check("same-GUID duplicate removed, newer kept", db(C)["Old-Stormrage-US"] == nil and db(C)["New-Stormrage-US"] ~= nil)
+end
 
 print(string.format("\n%d passed, %d failed", passed, failed))
 os.exit(failed == 0 and 0 or 1)

@@ -140,6 +140,26 @@ local function Str(value, maxLen)
 	end
 end
 
+-- A usable owner looks like "Name#1234". Anything else (empty, wrong type) is
+-- an account we can't identify, so its records can't be placed.
+local function IsBattleTag(value)
+	return type(value) == "string" and value:match("^[^#]+#%d+$") ~= nil
+end
+
+-- True when every section present came from the Battle.net friend list.
+local function IsPassiveOnly(record)
+	local any = false
+	for _, section in ipairs(SECTIONS) do
+		if record[section] then
+			if record[section].source ~= "bnet" then
+				return false
+			end
+			any = true
+		end
+	end
+	return any
+end
+
 local function Num(value)
 	if type(value) == "number" and value == value and value > -1e12 and value < 1e12 then
 		return value
@@ -229,7 +249,11 @@ local function SanitizeRecord(id, incoming, now)
 	if type(incoming) ~= "table" then
 		return nil
 	end
-	local out, any = { owner = Str(incoming.owner) }, false
+	local owner = Str(incoming.owner)
+	if not IsBattleTag(owner) then
+		return nil
+	end
+	local out, any = { owner = owner }, false
 	for _, section in ipairs(SECTIONS) do
 		local data = incoming[section]
 		if type(data) == "table" then
@@ -251,12 +275,32 @@ local function SanitizeRecord(id, incoming, now)
 	return any and out or nil
 end
 
+-- Owners whose data has ever arrived from their own addon. Their addon sends
+-- richer data, so the friend list isn't used for them.
+local function AddonOwners()
+	local owners = {}
+	for _, record in pairs(FriendInfoTrackerDB.characters) do
+		if record.owner and record.level and record.level.source == "addon" then
+			owners[record.owner] = true
+		end
+	end
+	return owners
+end
+
 -- Per-section merge: newer updatedAt wins. Own characters are never
 -- overwritten by data from others.
-local function MergeRecord(id, incoming, senderTag)
+local function MergeRecord(id, incoming, senderTag, addonOwners)
 	local characters = FriendInfoTrackerDB.characters
 	local record = characters[id]
 	if record and record.isMine then
+		return false
+	end
+	-- Characters on our own account come only from this client's addon.
+	if incoming.owner == addon.GetMyBattleTag() then
+		return false
+	end
+	-- Friend-list guesses are redundant once the owner's own addon reports.
+	if addonOwners and addonOwners[incoming.owner] and IsPassiveOnly(incoming) then
 		return false
 	end
 	record = record or {}
@@ -363,20 +407,8 @@ local function ClassTokenFromLocalized(className)
 	return className and classTokenByName[className]
 end
 
--- Owners whose data has ever arrived from their own addon. Their addon sends
--- richer data, so the friend list isn't used for them.
-local function AddonOwners()
-	local owners = {}
-	for _, record in pairs(FriendInfoTrackerDB.characters) do
-		if record.owner and record.level and record.level.source == "addon" then
-			owners[record.owner] = true
-		end
-	end
-	return owners
-end
-
 local function CapturePassive(battleTag, game, addonOwners)
-	if addonOwners[battleTag] or peers[game.gameAccountID] then
+	if not IsBattleTag(battleTag) or addonOwners[battleTag] or peers[game.gameAccountID] then
 		return
 	end
 	local name, realmDisplay = game.characterName, game.realmName
@@ -422,6 +454,59 @@ local function CapturePassive(battleTag, game, addonOwners)
 	record.location = { zone = zone, updatedAt = now, source = "bnet" }
 	characters[id] = record
 	addon.MarkDirty(id)
+end
+
+---------------------------------------------------------------------------
+-- Cleanup
+---------------------------------------------------------------------------
+
+-- Deletes records that shouldn't be listed: characters with no usable owner,
+-- ones attributed to our own account that we didn't log in ourselves, friend-list
+-- guesses for friends whose addon reports for itself, and friend-list copies
+-- of a character whose addon-reported record shares its GUID. Returns the count.
+local function CleanupRecords()
+	local characters = FriendInfoTrackerDB.characters
+	local myTag = addon.GetMyBattleTag()
+	local addonOwners = AddonOwners()
+	local remove, byGuid = {}, {}
+
+	for id, record in pairs(characters) do
+		if not record.isMine then
+			if not IsBattleTag(record.owner) or record.owner == myTag
+				or (addonOwners[record.owner] and IsPassiveOnly(record)) then
+				remove[id] = true
+			end
+		end
+	end
+
+	for id, record in pairs(characters) do
+		local guid = not remove[id] and not record.isMine and record.identity and record.identity.guid
+		if guid then
+			local key = record.owner .. "|" .. guid
+			local otherID = byGuid[key]
+			if otherID then
+				-- Keep the record with real (addon) data, else the newer one.
+				local other = characters[otherID]
+				local keepOther = (IsPassiveOnly(other) == IsPassiveOnly(record)) and (other.level and other.level.updatedAt or 0) >= (record.level and record.level.updatedAt or 0)
+					or IsPassiveOnly(record)
+				remove[keepOther and id or otherID] = true
+				byGuid[key] = keepOther and otherID or id
+			else
+				byGuid[key] = id
+			end
+		end
+	end
+
+	local count = 0
+	for id in pairs(remove) do
+		characters[id] = nil
+		dirty[id] = nil
+		count = count + 1
+	end
+	if count > 0 and addon.RefreshFrame then
+		addon.RefreshFrame()
+	end
+	return count
 end
 
 ---------------------------------------------------------------------------
@@ -495,6 +580,11 @@ local function ScanFriends()
 
 	if captured and addon.RefreshFrame then
 		addon.RefreshFrame()
+	end
+
+	local removed = CleanupRecords()
+	if removed > 0 then
+		print(string.format("|cff33ff99FriendInfoTracker:|r removed %d stale or duplicate entr%s", removed, removed == 1 and "y" or "ies"))
 	end
 end
 
@@ -586,6 +676,7 @@ local function HandleMessage(senderID, msgType, body)
 			return
 		end
 		local now, count, changed = time(), 0, false
+		local addonOwners = AddonOwners()
 		if peer.battleTag then
 			FriendInfoTrackerSettings.syncLog[peer.battleTag].data = now
 		end
@@ -595,7 +686,7 @@ local function HandleMessage(senderID, msgType, body)
 				break
 			end
 			local clean = SanitizeRecord(id, incoming, now)
-			if clean and clean.owner and MergeRecord(id, clean, peer.battleTag) then
+			if clean and MergeRecord(id, clean, peer.battleTag, addonOwners) then
 				addon.MarkDirty(id, senderID)
 				changed = true
 			end

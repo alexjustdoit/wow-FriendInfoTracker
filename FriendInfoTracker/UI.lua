@@ -43,7 +43,7 @@ local function IsListed(record, isMine)
 	if isMine then
 		return true
 	end
-	if not record.owner then
+	if not record.owner or record.owner == addon.GetMyBattleTag() then
 		return false
 	end
 	local friendTags = FriendInfoTrackerSettings.friendTags
@@ -535,13 +535,10 @@ StaticPopupDialogs["FRIENDINFOTRACKER_COPY_NAME"] = {
 	end,
 }
 
--- "Name-Realm", the form the mail "To:" field accepts for any realm.
-local function FullCharacterName(entry)
+-- Just the character name, without the realm.
+local function CharacterName(entry)
 	local identity = entry.record.identity or {}
-	if identity.name and identity.realm then
-		return identity.name .. "-" .. identity.realm
-	end
-	return (entry.id:match("^(.+%-.+)%-%u%u$")) or entry.id
+	return identity.name or entry.id:match("^(.+)%-[^%-]+%-%u%u$") or entry.id
 end
 
 local function CreateMainFrame()
@@ -714,13 +711,13 @@ local function GetOrCreateRow(parent, index)
 	row.copy:SetScript("OnClick", function(self)
 		local entry = self:GetParent().entry
 		if entry and entry.kind == "character" then
-			StaticPopup_Show("FRIENDINFOTRACKER_COPY_NAME", nil, nil, FullCharacterName(entry))
+			StaticPopup_Show("FRIENDINFOTRACKER_COPY_NAME", nil, nil, CharacterName(entry))
 		end
 	end)
 	row.copy:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-		GameTooltip:AddLine("Copy full name")
-		GameTooltip:AddLine("Paste it into the mail To: field.", 0.7, 0.7, 0.7)
+		GameTooltip:AddLine("Copy name")
+		GameTooltip:AddLine("Copies the character name without the realm.", 0.7, 0.7, 0.7)
 		GameTooltip:Show()
 	end)
 	row.copy:SetScript("OnLeave", GameTooltip_Hide)
@@ -744,10 +741,9 @@ end
 -- characters sorted most-recently-updated first. Hidden friends go last,
 -- under a collapsible "Hidden" header.
 local function BuildEntries()
-	local myTag = addon.GetMyBattleTag()
 	local groups, order = {}, {}
 	for id, record in pairs(FriendInfoTrackerDB.characters) do
-		local isMine = (record.isMine or (myTag ~= nil and record.owner == myTag)) and true or false
+		local isMine = record.isMine and true or false
 		local key = isMine and "" or (record.owner or "?")
 		if IsListed(record, isMine) then
 			if not groups[key] then
@@ -977,10 +973,9 @@ end
 
 -- Friends (by BattleTag) with cached characters, sorted by display name.
 local function KnownFriends()
-	local myTag = addon.GetMyBattleTag()
 	local counts = {}
 	for _, record in pairs(FriendInfoTrackerDB.characters) do
-		local isMine = record.isMine or (myTag ~= nil and record.owner == myTag)
+		local isMine = record.isMine
 		if not isMine and IsListed(record, false) then
 			local key = record.owner
 			counts[key] = (counts[key] or 0) + 1
@@ -1099,8 +1094,9 @@ local function DumpCharacters(query)
 			found = found + 1
 			print(string.format("|cff33ff99%s|r  owner=%s  receivedFrom=%s%s", id, tostring(record.owner),
 				tostring(record.receivedFrom), record.isMine and "  (mine)" or ""))
-			print(string.format("    identity: %s", identity and string.format("name=%s realm=%s region=%s class=%s",
-				tostring(identity.name), tostring(identity.realm), tostring(identity.region), tostring(identity.class)) or "none"))
+			print(string.format("    identity: %s", identity and string.format("name=%s realm=%s region=%s class=%s race=%s faction=%s guid=%s",
+				tostring(identity.name), tostring(identity.realm), tostring(identity.region), tostring(identity.class),
+				tostring(identity.race), tostring(identity.faction), tostring(identity.guid)) or "none"))
 			for _, section in ipairs(addon.SECTIONS) do
 				local data = record[section]
 				if data then
