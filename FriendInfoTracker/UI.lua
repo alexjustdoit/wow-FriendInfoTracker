@@ -1,8 +1,8 @@
 local addon = FriendInfoTracker
 
-local FRAME_WIDTH = 780
+local FRAME_WIDTH = 808
 local FRAME_HEIGHT = 440
-local ROW_WIDTH = 728
+local ROW_WIDTH = 756
 local LINE_HEIGHT = 14 -- one profession per line
 local ROW_PADDING = 6
 local HEADER_ROW_HEIGHT = 26
@@ -11,12 +11,12 @@ local STALE_AFTER_SECONDS = 7 * 86400
 
 -- Column layout shared by the column headers and every character row.
 local COLUMNS = {
-	{ key = "name", label = "Character", x = 6, width = 112 },
-	{ key = "level", label = "Level", x = 140, width = 40, justify = "CENTER" },
-	{ key = "zone", label = "Zone", x = 186, width = 150 },
-	{ key = "primary", label = "Primary", x = 342, width = 150 },
-	{ key = "secondary", label = "Secondary", x = 498, width = 150 },
-	{ key = "updated", label = "Updated", x = 654, width = 54 },
+	{ key = "name", label = "Character", x = 6, width = 140 },
+	{ key = "level", label = "Level", x = 168, width = 40, justify = "CENTER" },
+	{ key = "zone", label = "Zone", x = 214, width = 150 },
+	{ key = "primary", label = "Primary", x = 370, width = 150 },
+	{ key = "secondary", label = "Secondary", x = 526, width = 150 },
+	{ key = "updated", label = "Updated", x = 682, width = 54 },
 }
 
 -- The window is resizable; extra width beyond FRAME_WIDTH is shared between the
@@ -26,7 +26,7 @@ local MAX_WIDTH, MAX_HEIGHT = 1500, 1000
 local rowWidth = ROW_WIDTH
 for _, column in ipairs(COLUMNS) do
 	column.baseX, column.baseWidth = column.x, column.width
-	column.grow = column.key == "zone" or column.key == "primary" or column.key == "secondary"
+	column.grow = column.key == "name" or column.key == "zone" or column.key == "primary" or column.key == "secondary"
 end
 
 local SETTINGS_ROW_HEIGHT = 50
@@ -479,7 +479,7 @@ end
 
 -- Repositions the column headers and every row's cells for the current width.
 local function ApplyLayout(f)
-	local share = math.max(0, f:GetWidth() - FRAME_WIDTH) / 3
+	local share = math.max(0, f:GetWidth() - FRAME_WIDTH) / 4
 	local shift = 0
 	for _, column in ipairs(COLUMNS) do
 		column.x = column.baseX + shift
@@ -488,7 +488,7 @@ local function ApplyLayout(f)
 			shift = shift + share
 		end
 	end
-	rowWidth = ROW_WIDTH + share * 3
+	rowWidth = ROW_WIDTH + share * 4
 
 	for _, column in ipairs(COLUMNS) do
 		local label = f.headerLabels[column.key]
@@ -503,6 +503,7 @@ local function ApplyLayout(f)
 			cell:SetPoint("TOPLEFT", row, "TOPLEFT", column.x, -ROW_PADDING / 2)
 			cell:SetWidth(column.width)
 		end
+		row.copy:SetPoint("TOPLEFT", row, "TOPLEFT", COLUMNS[1].x + COLUMNS[1].width + 2, -ROW_PADDING / 2)
 	end
 end
 

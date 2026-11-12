@@ -487,8 +487,13 @@ local function CleanupRecords()
 			if otherID then
 				-- Keep the record with real (addon) data, else the newer one.
 				local other = characters[otherID]
-				local keepOther = (IsPassiveOnly(other) == IsPassiveOnly(record)) and (other.level and other.level.updatedAt or 0) >= (record.level and record.level.updatedAt or 0)
-					or IsPassiveOnly(record)
+				local otherPassive, recordPassive = IsPassiveOnly(other), IsPassiveOnly(record)
+				local keepOther
+				if otherPassive ~= recordPassive then
+					keepOther = recordPassive
+				else
+					keepOther = (other.level and other.level.updatedAt or 0) >= (record.level and record.level.updatedAt or 0)
+				end
 				remove[keepOther and id or otherID] = true
 				byGuid[key] = keepOther and otherID or id
 			else

@@ -10,6 +10,8 @@ All notable changes to FriendInfoTracker. Releases are on the
 - Only characters you logged in with are listed under "Your characters"; characters attributed to your own account by someone else's friend list are no longer shown there (#1, #3).
 
 ### Fixed
+- Character names longer than the column were clipped to the first word. The Character column is wider and grows with the window.
+- Duplicate cleanup could keep the older of two same-GUID records depending on iteration order.
 - Duplicate entries for one character (e.g. an addon-reported record plus a stale friend-list copy under a different name) are no longer accepted, and existing ones are removed automatically (#1).
 - Records with a missing or malformed owner BattleTag are rejected and purged, which stops unrelated characters from appearing in the wrong group (#3).
 - `/fit dump` also prints race, faction and GUID.
