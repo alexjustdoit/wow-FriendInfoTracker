@@ -50,6 +50,17 @@ local function IsListed(record, isMine)
 	return next(friendTags) == nil or friendTags[record.owner] == true
 end
 
+-- With "hide other faction" on, friends' characters on the opposing faction are
+-- left out of the list. Records with no known faction stay visible.
+local function IsOtherFaction(record, isMine)
+	if isMine or not FriendInfoTrackerSettings.hideOtherFaction then
+		return false
+	end
+	local mine = UnitFactionGroup("player")
+	local faction = record.identity and record.identity.faction
+	return mine ~= nil and faction ~= nil and faction ~= "" and faction ~= mine
+end
+
 local function IsFriendHidden(battleTag)
 	return FriendInfoTrackerSettings.hiddenFriends[battleTag] == true
 end
@@ -746,7 +757,7 @@ local function BuildEntries()
 	for id, record in pairs(FriendInfoTrackerDB.characters) do
 		local isMine = record.isMine and true or false
 		local key = isMine and "" or (record.owner or "?")
-		if IsListed(record, isMine) then
+		if IsListed(record, isMine) and not IsOtherFaction(record, isMine) then
 			if not groups[key] then
 				groups[key] = { key = key, isMine = isMine, hidden = not isMine and IsFriendHidden(key), characters = {} }
 				order[#order + 1] = groups[key]
@@ -799,6 +810,11 @@ local function BuildEntries()
 	return entries
 end
 
+local FACTION_ICONS = {
+	Alliance = "|TInterface\\TargetingFrame\\UI-PVP-Alliance:14:14:0:0:64:64:0:39:0:39|t ",
+	Horde = "|TInterface\\TargetingFrame\\UI-PVP-Horde:14:14:0:0:64:64:0:39:0:39|t ",
+}
+
 local function ShowCharacterRow(row, entry, currentID)
 	local record = entry.record
 	local identity = record.identity or {}
@@ -807,7 +823,7 @@ local function ShowCharacterRow(row, entry, currentID)
 	row:SetHeight(lineCount * LINE_HEIGHT + ROW_PADDING)
 
 	local cells = row.cells
-	cells.name:SetText(ClassColorString(Safe(identity.name or entry.id), identity.class))
+	cells.name:SetText((FACTION_ICONS[identity.faction] or "") .. ClassColorString(Safe(identity.name or entry.id), identity.class))
 	cells.level:SetText((record.level and record.level.value) or "-")
 	cells.zone:SetText(Safe((record.location and record.location.zone) or "-"))
 	cells.primary:SetText(#primary > 0 and table.concat(primary, "\n") or Gray("-"))
@@ -925,7 +941,7 @@ local function CreateSectionHeader(parent, text, y)
 	return header
 end
 
-local FRIEND_LIST_TOP = -108
+local FRIEND_LIST_TOP = -132
 
 local function CreateSettingsPanel(parent)
 	local panel = CreateFrame("Frame", "FriendInfoTrackerSettingsPanel", parent, "BasicFrameTemplateWithInset")
@@ -955,10 +971,18 @@ local function CreateSettingsPanel(parent)
 		addon.SetMinimapButtonShown(self:GetChecked() and true or false)
 	end)
 
+	panel.factionCheck = CreateCheck(content)
+	panel.factionCheck:SetPoint("TOPLEFT", content, "TOPLEFT", 0, -50)
+	panel.factionCheck.label:SetText("Hide other faction's characters")
+	panel.factionCheck:SetScript("OnClick", function(self)
+		FriendInfoTrackerSettings.hideOtherFaction = self:GetChecked() and true or nil
+		addon.RefreshFrame()
+	end)
+
 	-- Friends
-	CreateSectionHeader(content, "Friends", -62)
+	CreateSectionHeader(content, "Friends", -86)
 	local hint = content:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	hint:SetPoint("TOPLEFT", content, "TOPLEFT", 2, -84)
+	hint:SetPoint("TOPLEFT", content, "TOPLEFT", 2, -108)
 	hint:SetWidth(RECIPE_PANEL_WIDTH - 52)
 	hint:SetJustifyH("LEFT")
 	hint:SetText("Unchecked friends move to the collapsed Hidden section. Use the box under each friend to set their real name.")
@@ -997,6 +1021,7 @@ function addon.RefreshSettings()
 		return
 	end
 	settingsPanel.minimapCheck:SetChecked(addon.IsMinimapButtonShown())
+	settingsPanel.factionCheck:SetChecked(FriendInfoTrackerSettings.hideOtherFaction == true)
 
 	local friends = KnownFriends()
 	for index, friend in ipairs(friends) do

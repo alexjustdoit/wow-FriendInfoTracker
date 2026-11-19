@@ -617,6 +617,24 @@ do
 	fire(C, "BN_FRIEND_INFO_CHANGED")
 	advance(70)
 	check("same-GUID duplicate removed, newer kept", db(C)["Old-Stormrage-US"] == nil and db(C)["New-Stormrage-US"] ~= nil)
+
+	-- Ownership safeguards
+	local sendRec = function(owner, id, source, guid)
+		local rec = { owner = owner, identity = { name = id:match("^(.-)%-"), realm = "Stormrage", region = "US", updatedAt = clock, source = source, guid = guid },
+			level = { value = 30, updatedAt = clock + 5, source = source } }
+		fire(C, "BN_CHAT_MSG_ADDON", "FIT", "2:DATA:" .. math.random(2000, 9000) .. ":1:1:" .. C.env.FriendInfoTracker.Serialize({ [id] = rec }), "WHISPER", 22)
+	end
+	db(C)["Held-Stormrage-US"] = { owner = "Dan#4444", level = { value = 10, updatedAt = clock - 50, source = "addon" } }
+	sendRec("Eve#5555", "Held-Stormrage-US", "bnet")
+	check("relayed friend-list guess can't change owner", db(C)["Held-Stormrage-US"].owner == "Dan#4444")
+	sendRec("Eve#5555", "Held-Stormrage-US", "addon")
+	check("owner's own addon can take a character", db(C)["Held-Stormrage-US"].owner == "Eve#5555")
+
+	db(C)["Dup1-Stormrage-US"] = { owner = "Dan#4444", identity = { name = "Dup1", realm = "Stormrage", region = "US", guid = "Player-77", source = "addon" }, level = { value = 5, updatedAt = clock - 500, source = "addon" } }
+	db(C)["Dup2-Stormrage-US"] = { owner = "Fay#6666", identity = { name = "Dup2", realm = "Stormrage", region = "US", guid = "Player-77", source = "bnet" }, level = { value = 6, updatedAt = clock - 5, source = "bnet" } }
+	fire(C, "BN_FRIEND_INFO_CHANGED")
+	advance(70)
+	check("same GUID under two owners keeps addon-reported one", db(C)["Dup1-Stormrage-US"] ~= nil and db(C)["Dup2-Stormrage-US"] == nil)
 end
 
 print(string.format("\n%d passed, %d failed", passed, failed))

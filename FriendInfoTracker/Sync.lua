@@ -160,6 +160,16 @@ local function IsPassiveOnly(record)
 	return any
 end
 
+-- True when any section was reported by the owner's own addon.
+local function HasAddonData(record)
+	for _, section in ipairs(SECTIONS) do
+		if record[section] and record[section].source == "addon" then
+			return true
+		end
+	end
+	return false
+end
+
 local function Num(value)
 	if type(value) == "number" and value == value and value > -1e12 and value < 1e12 then
 		return value
@@ -303,6 +313,11 @@ local function MergeRecord(id, incoming, senderTag, addonOwners)
 	if addonOwners and addonOwners[incoming.owner] and IsPassiveOnly(incoming) then
 		return false
 	end
+	-- A relayed record can't move a character to a different owner unless the
+	-- new owner's own addon reported it; otherwise it's a friend-list guess.
+	if record and record.owner and record.owner ~= incoming.owner and not HasAddonData(incoming) then
+		return false
+	end
 	record = record or {}
 	local changed = false
 	for _, section in ipairs(SECTIONS) do
@@ -426,6 +441,11 @@ local function CapturePassive(battleTag, game, addonOwners)
 		return
 	end
 
+	-- Never take a character from an owner whose addon reported it first-hand.
+	if record and record.owner ~= battleTag and HasAddonData(record) then
+		return
+	end
+
 	local now = time()
 	local level, zone = game.characterLevel, game.areaName
 	if record and record.level and record.level.value == level
@@ -479,13 +499,21 @@ local function CleanupRecords()
 		end
 	end
 
+	-- One GUID is one character, whoever it's filed under. Our own characters
+	-- always win; otherwise keep the record with real (addon) data, else the newer.
+	local myGuids = {}
+	for _, record in pairs(characters) do
+		if record.isMine and record.identity and record.identity.guid then
+			myGuids[record.identity.guid] = true
+		end
+	end
 	for id, record in pairs(characters) do
 		local guid = not remove[id] and not record.isMine and record.identity and record.identity.guid
-		if guid then
-			local key = record.owner .. "|" .. guid
-			local otherID = byGuid[key]
+		if guid and myGuids[guid] then
+			remove[id] = true
+		elseif guid then
+			local otherID = byGuid[guid]
 			if otherID then
-				-- Keep the record with real (addon) data, else the newer one.
 				local other = characters[otherID]
 				local otherPassive, recordPassive = IsPassiveOnly(other), IsPassiveOnly(record)
 				local keepOther
@@ -495,9 +523,9 @@ local function CleanupRecords()
 					keepOther = (other.level and other.level.updatedAt or 0) >= (record.level and record.level.updatedAt or 0)
 				end
 				remove[keepOther and id or otherID] = true
-				byGuid[key] = keepOther and otherID or id
+				byGuid[guid] = keepOther and otherID or id
 			else
-				byGuid[key] = id
+				byGuid[guid] = id
 			end
 		end
 	end

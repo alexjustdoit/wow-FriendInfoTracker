@@ -5,11 +5,16 @@ All notable changes to FriendInfoTracker. Releases are on the
 
 ## [Unreleased]
 
+### Added
+- A small faction icon (Alliance/Horde) next to each character name.
+- Settings option "Hide other faction's characters" hides friends' characters on the opposing faction from the list (#4).
+
 ### Changed
 - The copy button now copies just the character name, without the realm (#2).
 - Only characters you logged in with are listed under "Your characters"; characters attributed to your own account by someone else's friend list are no longer shown there (#1, #3).
 
 ### Fixed
+- Safeguards against characters showing up under the wrong friend: a relayed friend-list guess can no longer move a character to a different owner, a friend-list capture no longer takes a character from an owner whose addon reported it, and a GUID filed under two owners (or matching one of your own characters) is reduced to one record.
 - Character names longer than the column were clipped to the first word. The Character column is wider and grows with the window.
 - Duplicate cleanup could keep the older of two same-GUID records depending on iteration order.
 - Duplicate entries for one character (e.g. an addon-reported record plus a stale friend-list copy under a different name) are no longer accepted, and existing ones are removed automatically (#1).
