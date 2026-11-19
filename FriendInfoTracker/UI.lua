@@ -1142,6 +1142,7 @@ local function PrintHelp()
 	print("  /fit sync - re-sync with online friends now")
 	print("  /fit status - friends running the addon and when each last synced")
 	print("  /fit dump <name> - show stored records for a character")
+	print("  /fit whoami - show how the game reports your character's name")
 	print("  /fit settings - open the settings panel")
 	print("  /fit minimap - show/hide the minimap button")
 end
@@ -1160,6 +1161,11 @@ SlashCmdList["FRIENDINFOTRACKER"] = function(input)
 		addon.PrintStatus()
 	elseif command == "dump" then
 		DumpCharacters(argument)
+	elseif command == "whoami" then
+		local fullName, fullRealm = UnitFullName("player")
+		print("|cff33ff99FriendInfoTracker:|r name APIs for your character")
+		print(string.format("  UnitName=%q  UnitFullName=%q,%q  GetUnitName=%q", tostring(UnitName("player")), tostring(fullName), tostring(fullRealm), tostring(GetUnitName("player", true))))
+		print(string.format("  stored id=%q", tostring(addon.GetCharacterID())))
 	elseif command == "settings" then
 		addon.ToggleSettings()
 	elseif command == "minimap" then
