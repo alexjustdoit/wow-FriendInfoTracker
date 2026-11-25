@@ -100,6 +100,7 @@ local function newClient(spec)
 		end,
 	}
 	env.UnitName = function() return spec.char end
+	env.GetUnitName = function() return spec.fullName or spec.char end
 	env.GetNormalizedRealmName = function() return spec.realm end
 	env.GetRealmName = function() return spec.realm end
 	env.GetCurrentRegionName = function() return "US" end
@@ -635,6 +636,26 @@ do
 	fire(C, "BN_FRIEND_INFO_CHANGED")
 	advance(70)
 	check("same GUID under two owners keeps addon-reported one", db(C)["Dup1-Stormrage-US"] ~= nil and db(C)["Dup2-Stormrage-US"] == nil)
+end
+
+-- WoW: Forever surnames: the full name comes from GetUnitName, and the record
+-- saved under the old first-name-only id moves to the new one
+do
+	local H = newClient({ name = "H", tag = "Hana#8888", gameID = 88, char = "Gugu", fullName = "Gugu Longhoof", realm = "Stormrage", level = 20, alchemy = 5, zone = "Mulgore" })
+	local I = newClient({ name = "I", tag = "Ivy#9999", gameID = 99, char = "Ivyy", realm = "Stormrage", level = 20, alchemy = 1, zone = "Mulgore" })
+	befriend(H, I)
+	login(I)
+	H.env.FriendInfoTrackerDB = { schemaVersion = 3, characters = {
+		["Gugu-Stormrage-US"] = { isMine = true, owner = "Hana#8888",
+			identity = { name = "Gugu", realm = "Stormrage", region = "US", guid = "Player-1-88", source = "self" },
+			recipes = { Alchemy = { "Minor Healing Potion" }, updatedAt = clock - 100, source = "self" } },
+	} }
+	login(H)
+	advance(70)
+	local moved = db(H)["Gugu Longhoof-Stormrage-US"]
+	check("own character keyed by full name", moved ~= nil and moved.identity.name == "Gugu Longhoof")
+	check("old first-name-only record moved", db(H)["Gugu-Stormrage-US"] == nil and moved and moved.recipes and moved.recipes.Alchemy[1] == "Minor Healing Potion")
+	check("friend receives full name", db(I)["Gugu Longhoof-Stormrage-US"] ~= nil)
 end
 
 print(string.format("\n%d passed, %d failed", passed, failed))

@@ -24,9 +24,10 @@ end
 addon.GetRegion = GetRegion
 
 -- Returns the stable "Name-Realm-Region" id used as the characters table key,
--- plus the three components individually.
+-- plus the three components individually. On WoW: Forever, UnitName returns
+-- first name and surname as two values; GetUnitName joins them into one string.
 local function GetCharacterID()
-	local name = UnitName("player")
+	local name = GetUnitName and GetUnitName("player", false) or UnitName("player")
 	local realm = GetNormalizedRealmName()
 	local region = GetRegion()
 	return string.format("%s-%s-%s", name, realm, region), name, realm, region
@@ -101,8 +102,20 @@ end
 
 local function GetCharacterRecord()
 	local id = GetCharacterID()
-	FriendInfoTrackerDB.characters[id] = FriendInfoTrackerDB.characters[id] or {}
-	local record = FriendInfoTrackerDB.characters[id]
+	local characters = FriendInfoTrackerDB.characters
+	if not characters[id] then
+		-- Same character saved under an older id (first name only, before
+		-- surnames were read): move it so its data carries over.
+		local guid = UnitGUID("player")
+		for otherID, other in pairs(characters) do
+			if other.isMine and guid and other.identity and other.identity.guid == guid then
+				characters[id], characters[otherID] = other, nil
+				break
+			end
+		end
+	end
+	characters[id] = characters[id] or {}
+	local record = characters[id]
 	record.isMine = true
 	return record, id
 end
