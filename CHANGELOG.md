@@ -15,6 +15,7 @@ All notable changes to FriendInfoTracker. Releases are on the
 
 ### Fixed
 - On WoW: Forever, your characters are saved with their full name (first name and surname) instead of just the first name. Existing records move to the full name automatically on login, keeping their professions and recipes.
+- Friends who once ran the addon but stopped (or whose addon has been silent for 2+ days) are tracked from the friend list again; before, their level and location stayed frozen at the last addon report.
 - Safeguards against characters showing up under the wrong friend: a relayed friend-list guess can no longer move a character to a different owner, a friend-list capture no longer takes a character from an owner whose addon reported it, and a GUID filed under two owners (or matching one of your own characters) is reduced to one record.
 - Character names longer than the column were clipped to the first word. The Character column is wider and grows with the window.
 - Duplicate cleanup could keep the older of two same-GUID records depending on iteration order.

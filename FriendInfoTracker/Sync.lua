@@ -25,6 +25,7 @@ local PING_GRACE = 30 -- seconds to wait for a PONG before falling back to the f
 local FLUSH_DELAY = 5 -- debounce before pushing changed records to peers
 local LOGOUT_MAX_MESSAGES = 20 -- cap on messages sent directly while logging out
 local BNET_REFRESH_SECONDS = 30 * 60 -- passive capture rewrites unchanged data at most this often
+local ADDON_ACTIVE_SECONDS = 2 * 86400 -- a friend whose addon was silent this long no longer counts as running it
 local REASSEMBLY_TIMEOUT = 120
 local MAX_CHUNKS = 200
 local MAX_RECORDS_PER_MESSAGE = 2000
@@ -285,13 +286,27 @@ local function SanitizeRecord(id, incoming, now)
 	return any and out or nil
 end
 
--- Owners whose data has ever arrived from their own addon. Their addon sends
--- richer data, so the friend list isn't used for them.
+-- Owners whose own addon has reported recently. Their addon sends richer data,
+-- so the friend list isn't used for them. A friend who stopped running the addon
+-- ages out and is tracked from the friend list again.
 local function AddonOwners()
-	local owners = {}
+	local owners, newest = {}, {}
 	for _, record in pairs(FriendInfoTrackerDB.characters) do
-		if record.owner and record.level and record.level.source == "addon" then
-			owners[record.owner] = true
+		if record.owner then
+			for _, section in ipairs(SECTIONS) do
+				local data = record[section]
+				if data and data.source == "addon" and (data.updatedAt or 0) > (newest[record.owner] or 0) then
+					newest[record.owner] = data.updatedAt
+				end
+			end
+		end
+	end
+	local log = FriendInfoTrackerSettings and FriendInfoTrackerSettings.syncLog or {}
+	local cutoff = time() - ADDON_ACTIVE_SECONDS
+	for owner, updatedAt in pairs(newest) do
+		local heard = log[owner] and log[owner].heard
+		if (heard or updatedAt) >= cutoff then
+			owners[owner] = true
 		end
 	end
 	return owners
